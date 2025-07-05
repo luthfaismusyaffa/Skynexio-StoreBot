@@ -1,13 +1,12 @@
-# main.py - VERSI PERBAIKAN FINAL
+# main.py - VERSI FINAL v2
 
 import os
 import logging
 import json
 import asyncio
-import time
 from flask import Flask, request, jsonify
 from telegram import Update, Bot, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler, filters
+from telegram.ext import Application, ContextTypes, CommandHandler, CallbackQueryHandler
 import xendit
 
 # --- KONFIGURASI ---
@@ -25,6 +24,10 @@ logger = logging.getLogger(__name__)
 xendit.api_key = XENDIT_API_KEY
 app = Flask(__name__)
 
+# --- INISIALISASI BOT TELEGRAM (SEKALI SAJA) ---
+# Buat instance aplikasi bot di luar fungsi agar bisa diakses bersama
+bot_app = Application.builder().token(TELEGRAM_TOKEN).build()
+
 # --- FUNGSI DATABASE & STOK ---
 def muat_data(file_path):
     try:
@@ -32,7 +35,7 @@ def muat_data(file_path):
     except (FileNotFoundError, json.JSONDecodeError): return [] if 's.json' in file_path else {}
 
 def simpan_data(data, file_path):
-    with open(file_path, 'w') as f: json.dump(data, f, indent=2)
+    with open(file_path, 'w') as f: json.dump(data, f, indent=2, ensure_ascii=False)
 
 def ambil_akun_dari_stok(produk_id):
     products = muat_data('products.json')
@@ -51,7 +54,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
+    
     if query.data == 'beli_produk':
         products = muat_data('products.json')
         keyboard = []
@@ -86,8 +89,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Gagal membuat invoice Xendit: {e}")
             await query.edit_message_text("❌ Gagal membuat invoice. Coba lagi nanti.")
 
-# --- INISIALISASI BOT (DI LUAR FUNGSI AGAR BISA DIPAKAI BERSAMA) ---
-bot_app = Application.builder().token(TELEGRAM_TOKEN).build()
+# Daftarkan handler ke bot_app
 bot_app.add_handler(CommandHandler("start", start_command))
 bot_app.add_handler(CallbackQueryHandler(button_handler))
 
@@ -96,11 +98,9 @@ bot_app.add_handler(CallbackQueryHandler(button_handler))
 def index():
     return "Skynexio Store Bot server is alive and well!"
 
-@app.route(f'/telegram', methods=['POST'])
+@app.route('/telegram', methods=['POST'])
 async def telegram_webhook():
-    """Endpoint ini menerima update dari Telegram."""
     try:
-        await bot_app.initialize()
         await bot_app.process_update(Update.de_json(request.get_json(force=True), bot_app.bot))
         return jsonify({'status': 'ok'})
     except Exception as e:
@@ -109,9 +109,7 @@ async def telegram_webhook():
 
 @app.route('/webhook/xendit', methods=['POST'])
 async def xendit_webhook():
-    """Endpoint ini menerima notifikasi pembayaran dari Xendit."""
     if request.headers.get('x-callback-token') != XENDIT_WEBHOOK_VERIFICATION_TOKEN:
-        logger.warning("Xendit webhook verification failed.")
         return jsonify({'status': 'error', 'message': 'Invalid verification token'}), 403
     
     data = request.json
@@ -137,15 +135,16 @@ async def xendit_webhook():
     
     return jsonify({'status': 'success'}), 200
 
-# Fungsi untuk setup webhook Telegram sekali saja (opsional, bisa via curl)
+# Fungsi untuk setup webhook Telegram saat startup
 async def setup():
+    await bot_app.initialize()
     await bot_app.bot.set_webhook(url=f"{WEBHOOK_URL}/telegram", allowed_updates=Update.ALL_TYPES)
-    print(f"Webhook diatur ke {WEBHOOK_URL}/telegram")
+    logger.info(f"Telegram webhook berhasil diatur ke {WEBHOOK_URL}/telegram")
 
-if __name__ == '__main__':
-    # Untuk menjalankan setup webhook secara manual sekali saja dari komputer lokal
-    # Pastikan variabel WEBHOOK_URL sudah diatur
-    # asyncio.run(setup())
-    
-    # Untuk menjalankan server secara lokal untuk tes
-    app.run(port=8080)
+# Jalankan setup saat server mulai
+if __name__ != '__main__':
+    loop = asyncio.get_event_loop()
+    if loop.is_running():
+        loop.create_task(setup())
+    else:
+        asyncio.run(setup())
