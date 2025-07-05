@@ -8,7 +8,7 @@ import time
 import random
 from flask import Flask, request, jsonify
 from waitress import serve
-from telegram import Update, Bot, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
+from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 import xendit
 
@@ -22,7 +22,7 @@ WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
 LOGO_URL = os.environ.get("LOGO_URL", "https://i.imgur.com/default-logo.png")
 
 # Logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 xendit.api_key = XENDIT_API_KEY
 
@@ -53,14 +53,11 @@ def ambil_akun_dari_stok(produk_id):
 def is_admin(update: Update):
     return str(update.effective_user.id) == ADMIN_CHAT_ID
 
-# --- ADMIN COMMAND ---
+# --- COMMAND ADMIN ---
 async def add_stock(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update): return
     try:
         produk_id, akun_baru = context.args[0], " ".join(context.args[1:])
-        if not akun_baru:
-            await update.message.reply_text("Format salah.")
-            return
         products = muat_data('products.json')
         for p in products:
             if p['id'] == produk_id:
@@ -135,7 +132,7 @@ async def info_stock(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pesan += f"- {p['nama']} (`{p['id']}`): {len(p.get('stok_akun', []))} akun\n"
     await update.message.reply_text(pesan, parse_mode='Markdown')
 
-# --- HANDLER PENGGUNA ---
+# --- PENGGUNA ---
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     counters = muat_data('counter.json')
     counters.setdefault('total_orders', 1000)
@@ -169,6 +166,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 keyboard.append([InlineKeyboardButton(f"{p['nama']} - Rp{p['harga']:,}", callback_data=f"order_{p['id']}")])
         keyboard.append([InlineKeyboardButton("⬅️ Kembali", callback_data='kembali')])
         await query.edit_message_text("Pilih produk yang ingin kamu beli:", reply_markup=InlineKeyboardMarkup(keyboard))
+
     elif data.startswith('order_'):
         produk_id = data.split('_', 1)[1]
         produk = next((p for p in muat_data('products.json') if p['id'] == produk_id), None)
@@ -198,7 +196,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             def __init__(self, m): self.message = m
         await start_command(Fake(query.message), context)
 
-# --- WEBHOOK FLASK ---
+# --- WEBHOOK ---
 @app.route('/')
 def index():
     return "Skynexio Store Bot server is running."
@@ -228,7 +226,7 @@ async def xendit_webhook():
 
             akun = ambil_akun_dari_stok(order['produk_id'])
             if akun:
-                msg = f"✅ Pembayaran sukses!\n\nBerikut akun kamu:\n`{akun}`\n\nGaransi? Hubungi: @{ADMIN_USERNAME}"
+                msg = f"✅ Pembayaran sukses!\n\nBerikut akun kamu:\n`{akun}`\n\nGaransi? Hubungi: {ADMIN_USERNAME}"
                 await bot_app.bot.send_message(order['user_id'], msg, parse_mode='Markdown')
                 await bot_app.bot.send_message(ADMIN_CHAT_ID, f"✅ Penjualan: {akun}")
             else:
@@ -237,6 +235,15 @@ async def xendit_webhook():
 
 # --- SETUP ---
 async def setup():
+    bot_app.add_handler(CommandHandler("start", start_command))
+    bot_app.add_handler(CommandHandler("add", add_stock))
+    bot_app.add_handler(CommandHandler("newproduct", new_product))
+    bot_app.add_handler(CommandHandler("delproduct", del_product))
+    bot_app.add_handler(CommandHandler("edit", edit_product))
+    bot_app.add_handler(CommandHandler("infostok", info_stock))
+    bot_app.add_handler(CallbackQueryHandler(button_handler))
+    bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+
     await bot_app.initialize()
     await bot_app.bot.set_webhook(url=f"{WEBHOOK_URL}/telegram", allowed_updates=Update.ALL_TYPES)
     await bot_app.bot.set_my_commands([
