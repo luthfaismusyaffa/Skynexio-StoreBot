@@ -1,4 +1,4 @@
-# main.py - VERSI FINAL DENGAN FITUR ADMIN LENGKAP
+# main.py - VERSI FINAL DENGAN SEMUA PERBAIKAN
 
 import os
 import logging
@@ -10,6 +10,7 @@ from flask import Flask, request, jsonify
 from waitress import serve
 from telegram import Update, Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, ContextTypes, CommandHandler, CallbackQueryHandler
+import xendit # <-- PASTIKAN BARIS INI ADA DI ATAS
 
 # --- KONFIGURASI ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -20,7 +21,7 @@ XENDIT_WEBHOOK_VERIFICATION_TOKEN = os.environ.get("XENDIT_WEBHOOK_VERIFICATION_
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
 LOGO_URL = os.environ.get("LOGO_URL", "https://i.imgur.com/default-logo.png")
 
-# Inisialisasi
+# Inisialisasi Logging & Aplikasi
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 xendit.api_key = XENDIT_API_KEY
@@ -187,10 +188,12 @@ bot_app.add_handler(CommandHandler("infostok", info_stock)); bot_app.add_handler
 # --- WEB SERVER & WEBHOOK ---
 @app.route('/')
 def index(): return "Skynexio Store Bot server is alive and well!"
+
 @app.route(f'/telegram', methods=['POST'])
 async def telegram_webhook():
     try: await bot_app.initialize(); await bot_app.process_update(Update.de_json(request.get_json(force=True), bot_app.bot)); return jsonify({'status': 'ok'})
     except Exception as e: logger.error(f"Error webhook Telegram: {e}"); return jsonify({'status': 'error'}), 500
+
 @app.route('/webhook/xendit', methods=['POST'])
 async def xendit_webhook():
     if request.headers.get('x-callback-token') != XENDIT_WEBHOOK_VERIFICATION_TOKEN: return jsonify({'status': 'error'}), 403
@@ -224,10 +227,12 @@ async def setup():
     await bot_app.initialize()
     await bot_app.bot.set_webhook(url=f"{WEBHOOK_URL}/telegram", allowed_updates=Update.ALL_TYPES)
     logger.info(f"Telegram webhook diatur ke {WEBHOOK_URL}/telegram")
+
 def main():
     loop = asyncio.new_event_loop(); asyncio.set_event_loop(loop)
     loop.run_until_complete(setup())
     port = int(os.environ.get("PORT", 8080))
     serve(app, host="0.0.0.0", port=port)
+
 if __name__ == '__main__':
     main()
