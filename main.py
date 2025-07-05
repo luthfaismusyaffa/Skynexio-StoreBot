@@ -1,5 +1,3 @@
-# main.py
-
 import os
 import logging
 import json
@@ -8,14 +6,14 @@ import time
 import random
 from flask import Flask, request, jsonify
 from waitress import serve
-from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import Application, ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 import xendit
 
 # --- KONFIGURASI ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID")
-ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "@watchingnemo")
+ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
 XENDIT_API_KEY = os.environ.get("XENDIT_API_KEY")
 XENDIT_WEBHOOK_VERIFICATION_TOKEN = os.environ.get("XENDIT_WEBHOOK_VERIFICATION_TOKEN")
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
@@ -53,7 +51,7 @@ def ambil_akun_dari_stok(produk_id):
 def is_admin(update: Update):
     return str(update.effective_user.id) == ADMIN_CHAT_ID
 
-# --- COMMAND ADMIN ---
+# --- HANDLER ADMIN ---
 async def add_stock(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update): return
     try:
@@ -78,13 +76,7 @@ async def new_product(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if any(p['id'] == id_produk for p in products):
             await update.message.reply_text(f"❌ ID '{id_produk}' sudah ada.")
             return
-        products.append({
-            "id": id_produk,
-            "nama": nama_produk,
-            "harga": int(harga),
-            "deskripsi": deskripsi,
-            "stok_akun": []
-        })
+        products.append({"id": id_produk, "nama": nama_produk, "harga": int(harga), "deskripsi": deskripsi, "stok_akun": []})
         simpan_data(products, 'products.json')
         await update.message.reply_text(f"✅ Produk '{nama_produk}' ditambahkan.")
     except Exception as e:
@@ -112,10 +104,7 @@ async def edit_product(update: Update, context: ContextTypes.DEFAULT_TYPE):
         products = muat_data('products.json')
         for p in products:
             if p['id'] == produk_id:
-                if field == 'harga':
-                    p[field] = int(new_value)
-                else:
-                    p[field] = new_value
+                p[field] = int(new_value) if field == 'harga' else new_value
                 simpan_data(products, 'products.json')
                 await update.message.reply_text("✅ Produk berhasil diupdate.")
                 return
@@ -132,7 +121,7 @@ async def info_stock(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pesan += f"- {p['nama']} (`{p['id']}`): {len(p.get('stok_akun', []))} akun\n"
     await update.message.reply_text(pesan, parse_mode='Markdown')
 
-# --- PENGGUNA ---
+# --- HANDLER PENGGUNA ---
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     counters = muat_data('counter.json')
     counters.setdefault('total_orders', 1000)
@@ -168,7 +157,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("Pilih produk yang ingin kamu beli:", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif data.startswith('order_'):
-        produk_id = data.split('_', 1)[1]
+        produk_id = data.replace("order_", "", 1)
         produk = next((p for p in muat_data('products.json') if p['id'] == produk_id), None)
         if not produk:
             await query.edit_message_text("Waduh, produknya udah gaib atau stoknya baru saja habis. Coba /start lagi.")
@@ -210,28 +199,6 @@ async def telegram_webhook():
     except Exception as e:
         logger.error(e)
         return jsonify({'status': 'error'}), 500
-
-@app.route('/webhook/xendit', methods=['POST'])
-async def xendit_webhook():
-    if request.headers.get('x-callback-token') != XENDIT_WEBHOOK_VERIFICATION_TOKEN:
-        return jsonify({'status': 'forbidden'}), 403
-    data = request.json
-    if data.get('status') == 'PAID':
-        external_id = data.get('external_id')
-        orders = muat_data('orders.json')
-        order = next((o for o in orders if o['external_id'] == external_id and o['status'] == 'PENDING'), None)
-        if order:
-            order['status'] = 'PAID'
-            simpan_data(orders, 'orders.json')
-
-            akun = ambil_akun_dari_stok(order['produk_id'])
-            if akun:
-                msg = f"✅ Pembayaran sukses!\n\nBerikut akun kamu:\n`{akun}`\n\nGaransi? Hubungi: {ADMIN_USERNAME}"
-                await bot_app.bot.send_message(order['user_id'], msg, parse_mode='Markdown')
-                await bot_app.bot.send_message(ADMIN_CHAT_ID, f"✅ Penjualan: {akun}")
-            else:
-                await bot_app.bot.send_message(order['user_id'], "Pembayaran berhasil, tapi stok habis. Admin akan segera hubungi kamu.")
-    return jsonify({'status': 'ok'})
 
 # --- SETUP ---
 async def setup():
