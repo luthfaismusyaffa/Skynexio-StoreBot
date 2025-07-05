@@ -5,8 +5,8 @@
     "harga": 25000,
     "deskripsi": "Nonton bareng di satu profil, kualitas 4K UHD. Cocok buat coba-coba!",
     "stok_akun": [
-      "net7d_1@email.com:pass123",
-      "net7d_2@email.com:pass456"
+      "akunsharing@email.com:pass123|PROFIL 1|1111",
+      "akunsharing@email.com:pass123|PROFIL 2|2222"
     ]
   },
   {
@@ -15,9 +15,8 @@
     "harga": 55000,
     "deskripsi": "Nonton bareng sebulan penuh, satu profil khusus buat kamu. Hemat!",
     "stok_akun": [
-      "net30d_1@email.com:pass123",
-      "net30d_2@email.com:pass456",
-      "net30d_3@email.com:pass789"
+      "akunsharing@email.com:pass123|PROFIL 3|3333",
+      "akunsharing@email.com:pass123|PROFIL 4|4444"
     ]
   },
   {
@@ -26,7 +25,8 @@
     "harga": 160000,
     "deskripsi": "Satu akun full buat kamu sendiri dan keluargamu. Bebas atur profil!",
     "stok_akun": [
-      "netpvt_1@email.com:passpvt1"
+      "netpvt_1@email.com:passpvt1",
+      "netpvt_2@email.com:passpvt2"
     ]
   },
   {
