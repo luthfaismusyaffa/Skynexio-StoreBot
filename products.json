@@ -1,0 +1,21 @@
+[
+    {
+      "id": "netflix_premium_1bln",
+      "nama": "Netflix Premium 1 Bulan",
+      "harga": 55000,
+      "deskripsi": "Langganan Netflix Premium untuk 1 bulan. Akun private.",
+      "stok_akun": [
+        "akun1@email.com:pass123",
+        "akun2@email.com:pass456"
+      ]
+    },
+    {
+      "id": "chatgpt_plus_1bln",
+      "nama": "ChatGPT Plus 1 Bulan",
+      "harga": 350000,
+      "deskripsi": "Akses penuh ke fitur ChatGPT Plus selama 1 bulan.",
+      "stok_akun": [
+        "gpt1@email.com:gptpass1"
+      ]
+    }
+  ]
