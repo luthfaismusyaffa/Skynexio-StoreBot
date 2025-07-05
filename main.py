@@ -59,7 +59,7 @@ def ambil_akun_dari_stok(produk_id):
     return None
 
 # --- BAGIAN TELEGRAM BOT (Perintah dan Tombol) ---
-async def start_command(update: Update, context: application.context_types.DEFAULT_TYPE):
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler untuk perintah /start."""
     keyboard = [[InlineKeyboardButton("🛒 Beli Akun Premium", callback_data='beli_produk')]]
     reply_markup = InlineKeyboardMarkup(keyboard)
