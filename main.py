@@ -1,4 +1,4 @@
-# main.py - VERSI FINAL DENGAN CEK STOK & PERBAIKAN
+# main.py - VERSI FINAL DENGAN SEMUA PERBAIKAN
 
 import os
 import logging
@@ -10,6 +10,7 @@ from flask import Flask, request, jsonify
 from waitress import serve
 from telegram import Update, Bot, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import Application, ContextTypes, CommandHandler, CallbackQueryHandler
+import xendit # <-- KESALAHAN ADA DI SINI, BARIS INI HILANG SEBELUMNYA
 
 # --- KONFIGURASI ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -20,7 +21,7 @@ XENDIT_WEBHOOK_VERIFICATION_TOKEN = os.environ.get("XENDIT_WEBHOOK_VERIFICATION_
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
 LOGO_URL = os.environ.get("LOGO_URL", "https://i.imgur.com/default-logo.png")
 
-# Inisialisasi
+# Inisialisasi Logging & Aplikasi
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 xendit.api_key = XENDIT_API_KEY
@@ -45,29 +46,47 @@ def ambil_akun_dari_stok(produk_id):
             return akun
     return None
 
-# --- PERINTAH ADMIN --- (Tidak ada perubahan di sini)
-def is_admin(update: Update): return str(update.effective_user.id) == ADMIN_CHAT_ID
+# --- PERINTAH ADMIN ---
+def is_admin(update: Update):
+    return str(update.effective_user.id) == ADMIN_CHAT_ID
+
 async def add_stock(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update): return
     try:
-        produk_id, akun_baru = context.args[0], " ".join(context.args[1:])
-        if not akun_baru: await update.message.reply_text("Format salah."); return
+        produk_id = context.args[0]
+        akun_baru = " ".join(context.args[1:])
+        if not akun_baru:
+            await update.message.reply_text("Format salah. Stok tidak boleh kosong."); return
         products = muat_data('products.json')
         produk_ditemukan = False
         for p in products:
-            if p['id'] == produk_id: p.setdefault('stok_akun', []).append(akun_baru); produk_ditemukan = True; break
-        if produk_ditemukan: simpan_data(products, 'products.json'); await update.message.reply_text(f"✅ Stok ditambahkan ke: {produk_id}")
-        else: await update.message.reply_text(f"❌ Produk ID '{produk_id}' tidak ditemukan.")
-    except (ValueError, IndexError): await update.message.reply_text("Format: /add <id_produk> <detail_akun>")
+            if p['id'] == produk_id:
+                p.setdefault('stok_akun', []).append(akun_baru)
+                produk_ditemukan = True
+                break
+        if produk_ditemukan:
+            simpan_data(products, 'products.json')
+            await update.message.reply_text(f"✅ Stok berhasil ditambahkan ke: {produk_id}")
+        else:
+            await update.message.reply_text(f"❌ Produk ID '{produk_id}' tidak ditemukan.")
+    except (ValueError, IndexError):
+        await update.message.reply_text("Format salah. Gunakan: /add <id_produk> <detail_akun>")
+
 async def new_product(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update): return
     try:
-        id_produk, nama_produk, harga, deskripsi = [x.strip() for x in " ".join(context.args).split('|')]
+        command_text = " ".join(context.args)
+        id_produk, nama_produk, harga, deskripsi = [x.strip() for x in command_text.split('|')]
         products = muat_data('products.json')
-        if any(p['id'] == id_produk for p in products): await update.message.reply_text(f"❌ ID '{id_produk}' sudah ada."); return
+        if any(p['id'] == id_produk for p in products):
+            await update.message.reply_text(f"❌ Produk ID '{id_produk}' sudah ada."); return
         products.append({"id": id_produk, "nama": nama_produk, "harga": int(harga), "deskripsi": deskripsi, "stok_akun": []})
-        simpan_data(products, 'products.json'); await update.message.reply_text(f"✅ Produk '{nama_produk}' dibuat.")
-    except Exception as e: logger.error(f"Error newproduct: {e}"); await update.message.reply_text("Format: /newproduct <id> | <nama> | <harga> | <deskripsi>")
+        simpan_data(products, 'products.json')
+        await update.message.reply_text(f"✅ Produk baru '{nama_produk}' berhasil dibuat. Lanjutkan dengan /add.")
+    except Exception as e:
+        logger.error(f"Error newproduct: {e}")
+        await update.message.reply_text("Format salah. Gunakan:\n/newproduct <id> | <nama> | <harga> | <deskripsi>")
+
 async def del_product(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update): return
     try:
@@ -75,27 +94,47 @@ async def del_product(update: Update, context: ContextTypes.DEFAULT_TYPE):
         products = muat_data('products.json')
         original_len = len(products)
         products = [p for p in products if p['id'] != produk_id_to_del]
-        if len(products) < original_len: simpan_data(products, 'products.json'); await update.message.reply_text(f"✅ Produk '{produk_id_to_del}' dihapus.")
-        else: await update.message.reply_text(f"❌ Produk ID '{produk_id_to_del}' tidak ditemukan.")
-    except IndexError: await update.message.reply_text("Format: /delproduct <id_produk>")
+        if len(products) < original_len:
+            simpan_data(products, 'products.json')
+            await update.message.reply_text(f"✅ Produk '{produk_id_to_del}' berhasil dihapus.")
+        else:
+            await update.message.reply_text(f"❌ Produk ID '{produk_id_to_del}' tidak ditemukan.")
+    except IndexError:
+        await update.message.reply_text("Format salah. Gunakan: /delproduct <id_produk>")
+
 async def edit_product(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update): return
     try:
-        produk_id, field, new_value = context.args[0], context.args[1].lower(), " ".join(context.args[2:])
-        if field not in ['nama', 'harga', 'deskripsi']: await update.message.reply_text("Field: 'nama', 'harga', 'deskripsi'."); return
+        produk_id = context.args[0]
+        field = context.args[1].lower()
+        new_value = " ".join(context.args[2:])
+        if field not in ['nama', 'harga', 'deskripsi']:
+            await update.message.reply_text("Field tidak valid. Gunakan 'nama', 'harga', atau 'deskripsi'."); return
+        
         products = muat_data('products.json')
         produk_ditemukan = False
         for p in products:
-            if p['id'] == produk_id: p[field] = int(new_value) if field == 'harga' else new_value; produk_ditemukan = True; break
-        if produk_ditemukan: simpan_data(products, 'products.json'); await update.message.reply_text(f"✅ Produk '{produk_id}' diupdate.")
-        else: await update.message.reply_text(f"❌ Produk ID '{produk_id}' tidak ditemukan.")
-    except Exception as e: logger.error(f"Error editproduct: {e}"); await update.message.reply_text("Format: /edit <id_produk> <field> <nilai_baru>")
+            if p['id'] == produk_id:
+                p[field] = int(new_value) if field == 'harga' else new_value
+                produk_ditemukan = True
+                break
+        if produk_ditemukan:
+            simpan_data(products, 'products.json')
+            await update.message.reply_text(f"✅ Produk '{produk_id}' berhasil diupdate: {field} menjadi {new_value}.")
+        else:
+            await update.message.reply_text(f"❌ Produk ID '{produk_id}' tidak ditemukan.")
+    except Exception as e:
+        logger.error(f"Error editproduct: {e}")
+        await update.message.reply_text("Format salah. Gunakan: /edit <id_produk> <field> <nilai_baru>")
+
 async def info_stock(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update): return
     products = muat_data('products.json')
-    if not products: await update.message.reply_text("Belum ada produk."); return
+    if not products:
+        await update.message.reply_text("Belum ada produk."); return
     pesan_stok = "📦 **Laporan Stok Saat Ini** 📦\n\n"
-    for p in products: pesan_stok += f"- `{p['id']}`\n  Nama: {p['nama']}\n  Stok: **{len(p.get('stok_akun', []))}** akun\n\n"
+    for p in products:
+        pesan_stok += f"- `{p['id']}`\n  Nama: {p['nama']}\n  Stok: **{len(p.get('stok_akun', []))}** akun\n\n"
     await update.message.reply_text(pesan_stok, parse_mode='Markdown')
 
 # --- HANDLER PENGGUNA ---
@@ -104,8 +143,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     counters.setdefault('total_orders', 5530); counters.setdefault('total_turnover', 54000000)
     counters['total_orders'] += random.randint(1, 3)
     simpan_data(counters, 'counter.json')
-    # --- PERUBAHAN: Tombol Menu Baru ---
-    keyboard = [[InlineKeyboardButton("✅ Cek Stok Ready", callback_data='cek_stok')]]
+    keyboard = [[InlineKeyboardButton("🛒 Lihat Produk Premium", callback_data='beli_produk')]]
     total_orders_formatted = f"{counters['total_orders']:,}"
     total_turnover_formatted = f"Rp{counters['total_turnover']:,}"
     pesan_selamat_datang = (f"**Selamat Datang di Skynexio Store!** ✨\n\nPusatnya akun premium untuk segala kebutuhan digitalmu!\n\n---\n"
@@ -116,37 +154,35 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query; await query.answer()
-    chat_id = query.message.chat_id
-
-    # --- PERUBAHAN: Logika Tombol Baru untuk Cek Stok ---
-    if query.data == 'cek_stok':
-        await query.message.delete()
+    
+    if query.data == 'beli_produk':
+        # Tidak menghapus pesan lama, tapi mengirim pesan baru
         products = muat_data('products.json')
         keyboard = []
         for p in products:
             if p.get('stok_akun'): keyboard.append([InlineKeyboardButton(f"✅ {p['nama']} - Rp{p['harga']:,}", callback_data=f"order_{p['id']}")])
         if not keyboard:
-            await context.bot.send_message(chat_id=chat_id, text="Yah, amunisi lagi kosong nih. Cek lagi nanti ya! 🙏"); return
+            await context.bot.send_message(chat_id=query.message.chat_id, text="Yah, amunisi lagi kosong nih. Cek lagi nanti ya! 🙏"); return
         keyboard.append([InlineKeyboardButton("⬅️ Kembali ke Menu Awal", callback_data='kembali_ke_awal')])
-        await context.bot.send_message(chat_id=chat_id, text="Ini dia daftar 'amunisi' premium kita yang ready. Pilih jagoanmu! 👇", reply_markup=InlineKeyboardMarkup(keyboard))
+        await context.bot.send_message(chat_id=query.message.chat_id, text="Ini dia daftar 'amunisi' premium kita. Pilih jagoanmu! 👇", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif query.data == 'kembali_ke_awal':
         await query.message.delete()
-        # Memanggil fungsi start_command memerlukan objek 'update' yang memiliki 'message'
-        # Kita buat objek tiruan sederhana untuk memanggilnya
+        # Membuat objek update tiruan agar bisa memanggil start_command
         class MockMessage:
             def __init__(self, original_message):
                 self.message = original_message
         await start_command(MockMessage(query.message), context)
 
+
     elif query.data.startswith('order_'):
         produk_id = query.data.split('_')[1]
         produk = next((p for p in muat_data('products.json') if p['id'] == produk_id), None)
         if not produk:
-            # --- PERBAIKAN: Mengirim pesan baru, bukan mengedit ---
-            await context.bot.send_message(chat_id=chat_id, text="Waduh, produknya udah gaib atau stoknya baru saja habis. Coba /start lagi.")
+            await context.bot.send_message(chat_id=query.message.chat_id, text="Waduh, produknya udah gaib atau stoknya baru saja habis. Coba /start lagi.")
             await query.message.delete()
             return
+
         await query.edit_message_text(f"Oke, siap! Pesananmu lagi dibuatin tiketnya... ⏳")
         try:
             external_id = f"skynexio-{produk_id}-{update.effective_user.id}-{int(time.time())}"
@@ -167,10 +203,16 @@ bot_app.add_handler(CommandHandler("infostok", info_stock)); bot_app.add_handler
 # --- WEB SERVER & WEBHOOK ---
 @app.route('/')
 def index(): return "Skynexio Store Bot server is alive and well!"
+
 @app.route(f'/telegram', methods=['POST'])
 async def telegram_webhook():
-    try: await bot_app.initialize(); await bot_app.process_update(Update.de_json(request.get_json(force=True), bot_app.bot)); return jsonify({'status': 'ok'})
-    except Exception as e: logger.error(f"Error webhook Telegram: {e}"); return jsonify({'status': 'error'}), 500
+    try:
+        await bot_app.initialize()
+        await bot_app.process_update(Update.de_json(request.get_json(force=True), bot_app.bot))
+        return jsonify({'status': 'ok'})
+    except Exception as e:
+        logger.error(f"Error webhook Telegram: {e}"); return jsonify({'status': 'error'}), 500
+
 @app.route('/webhook/xendit', methods=['POST'])
 async def xendit_webhook():
     if request.headers.get('x-callback-token') != XENDIT_WEBHOOK_VERIFICATION_TOKEN: return jsonify({'status': 'error'}), 403
@@ -180,13 +222,15 @@ async def xendit_webhook():
         orders = muat_data('orders.json')
         order_data = next((o for o in orders if o.get('external_id') == external_id and o.get('status') == 'PENDING'), None)
         if order_data:
-            await bot_app.initialize(); order_data['status'] = 'PAID'
+            await bot_app.initialize()
+            order_data['status'] = 'PAID'
             counters = muat_data('counter.json'); counters['total_orders'] += 1; counters['total_turnover'] += order_data.get('harga', 0)
             simpan_data(counters, 'counter.json'); simpan_data(orders, 'orders.json')
             akun = ambil_akun_dari_stok(order_data['produk_id'])
             link_garansi = f"https://t.me/{ADMIN_USERNAME}"
             if akun:
-                parts = akun.split('|'); login = parts[0]
+                parts = akun.split('|')
+                login = parts[0]
                 pesan_akun = f"Login: `{login}`"
                 if len(parts) > 1: pesan_akun += f"\nProfil: **{parts[1]}**"
                 if len(parts) > 2: pesan_akun += f"\nPIN: `{parts[2]}`"
@@ -204,13 +248,19 @@ async def setup():
     webhook_url = f"{WEBHOOK_URL}/telegram"
     await bot_app.bot.set_webhook(url=webhook_url, allowed_updates=Update.ALL_TYPES)
     logger.info(f"Telegram webhook diatur ke {webhook_url}")
-    commands = [BotCommand("start", "🚀 Mulai Bot"), BotCommand("infostok", "📦 (Admin) Cek Laporan Stok")]
+    
+    commands = [
+        BotCommand("start", "🚀 Mulai Bot & Lihat Menu Utama"),
+        BotCommand("infostok", "📦 (Admin) Cek Laporan Stok")
+    ]
     await bot_app.bot.set_my_commands(commands)
     logger.info("Menu perintah berhasil diatur.")
+
 def main():
     loop = asyncio.new_event_loop(); asyncio.set_event_loop(loop)
     loop.run_until_complete(setup())
     port = int(os.environ.get("PORT", 8080))
     serve(app, host="0.0.0.0", port=port)
+
 if __name__ == '__main__':
     main()
