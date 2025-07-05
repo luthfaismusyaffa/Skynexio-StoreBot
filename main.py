@@ -1,4 +1,4 @@
-# main.py - VERSI FULL WEBHOOK (STABIL)
+# main.py - VERSI FINAL (FIXED)
 
 import os
 import logging
@@ -11,11 +11,11 @@ from telegram.ext import Application, ContextTypes, CommandHandler, CallbackQuer
 import xendit
 
 # --- KONFIGURASI ---
+# Ambil konfigurasi dari Environment Variables di Railway
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID")
 XENDIT_API_KEY = os.environ.get("XENDIT_API_KEY")
 XENDIT_WEBHOOK_VERIFICATION_TOKEN = os.environ.get("XENDIT_WEBHOOK_VERIFICATION_TOKEN")
-# URL publik Anda dari Railway. Ganti di Environment Variables nanti.
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
 
 # Inisialisasi Logging
@@ -52,7 +52,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
+    
     if query.data == 'beli_produk':
         products = muat_data('products.json')
         keyboard = []
@@ -88,6 +88,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("❌ Gagal membuat invoice. Coba lagi nanti.")
 
 # --- INISIALISASI APLIKASI TELEGRAM ---
+# Kita definisikan bot_app di sini agar bisa diakses oleh semua fungsi.
 bot_app = Application.builder().token(TELEGRAM_TOKEN).build()
 bot_app.add_handler(CommandHandler("start", start_command))
 bot_app.add_handler(CallbackQueryHandler(button_handler))
@@ -110,7 +111,7 @@ async def xendit_webhook():
     if request.headers.get('x-callback-token') != XENDIT_WEBHOOK_VERIFICATION_TOKEN:
         logger.warning("Xendit webhook verification failed.")
         return jsonify({'status': 'error', 'message': 'Invalid verification token'}), 403
-
+    
     data = request.json
     logger.info(f"Xendit webhook diterima: {data}")
 
@@ -123,7 +124,7 @@ async def xendit_webhook():
             order_data['status'] = 'PAID'
             simpan_data(orders, 'orders.json')
             akun = ambil_akun_dari_stok(order_data['produk_id'])
-
+            
             if akun:
                 pesan_sukses = f"🎉 Pembayaran Lunas!\n\nTerima kasih. Berikut detail akun Anda:\n\n`{akun}`\n\nHarap segera amankan akun Anda."
                 await bot_app.bot.send_message(order_data['user_id'], pesan_sukses, parse_mode='Markdown')
@@ -131,15 +132,17 @@ async def xendit_webhook():
             else:
                 await bot_app.bot.send_message(order_data['user_id'], "Pembayaran Anda berhasil, namun stok habis. Admin akan segera menghubungi Anda.")
                 await bot_app.bot.send_message(ADMIN_CHAT_ID, f"‼️ STOK HABIS ‼️\nID: {external_id} lunas tapi stok kosong! Hubungi user: {order_data['user_id']}")
-
+    
     return jsonify({'status': 'success'}), 200
 
-# Fungsi untuk mendaftarkan webhook Telegram saat server pertama kali jalan
-async def setup_telegram_webhook():
+# --- FUNGSI SETUP SAAT SERVER STARTUP ---
+async def setup_bot():
+    """Inisialisasi bot dan atur webhook saat server pertama kali jalan."""
+    await bot_app.initialize() # <--- PERBAIKAN: Menyalakan bot
     url = f"{WEBHOOK_URL}/telegram"
     await bot_app.bot.set_webhook(url=url)
-    logger.info(f"Telegram webhook berhasil diatur ke {url}")
+    logger.info(f"Telegram webhook berhasil diatur ke {url} dan bot telah diinisialisasi.")
 
-# Jalankan setup webhook saat startup aplikasi
+# Jalankan setup saat startup aplikasi di lingkungan hosting
 if __name__ != '__main__':
-    asyncio.run(setup_telegram_webhook())
+    asyncio.run(setup_bot())
