@@ -1,4 +1,4 @@
-# main.py - VERSI FINAL DENGAN SEMUA PERBAIKAN
+# main.py - VERSI FINAL (FIX KLIK TOMBOL)
 
 import os
 import logging
@@ -10,7 +10,6 @@ from flask import Flask, request, jsonify
 from waitress import serve
 from telegram import Update, Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, ContextTypes, CommandHandler, CallbackQueryHandler
-import xendit # <-- PASTIKAN BARIS INI ADA DI ATAS
 
 # --- KONFIGURASI ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -21,7 +20,7 @@ XENDIT_WEBHOOK_VERIFICATION_TOKEN = os.environ.get("XENDIT_WEBHOOK_VERIFICATION_
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
 LOGO_URL = os.environ.get("LOGO_URL", "https://i.imgur.com/default-logo.png")
 
-# Inisialisasi Logging & Aplikasi
+# Inisialisasi
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 xendit.api_key = XENDIT_API_KEY
@@ -153,21 +152,46 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_photo(photo=LOGO_URL, caption=pesan_selamat_datang, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query; await query.answer()
+    query = update.callback_query
+    await query.answer()
+    
+    # PERBAIKAN UTAMA ADA DI BLOK INI
     if query.data == 'beli_produk':
+        # Hapus pesan foto sebelumnya
+        await query.message.delete()
+        
         products = muat_data('products.json')
         keyboard = []
+        pesan_produk = "Ini dia daftar 'amunisi' premium kita. Pilih jagoanmu! 👇"
         for p in products:
-            if p.get('stok_akun'): keyboard.append([InlineKeyboardButton(f"✅ {p['nama']} - Rp{p['harga']:,}", callback_data=f"order_{p['id']}")])
-        if not keyboard: await query.edit_message_text("Yah, amunisi lagi kosong nih. Cek lagi nanti ya! 🙏"); return
+            if p.get('stok_akun'):
+                keyboard.append([InlineKeyboardButton(f"✅ {p['nama']} - Rp{p['harga']:,}", callback_data=f"order_{p['id']}")])
+        
+        if not keyboard:
+            # Kirim pesan baru karena pesan lama sudah dihapus
+            await context.bot.send_message(chat_id=query.message.chat_id, text="Yah, amunisi lagi kosong nih. Cek lagi nanti ya! 🙏")
+            return
+            
         keyboard.append([InlineKeyboardButton("⬅️ Kembali", callback_data='kembali_ke_awal')])
-        await query.edit_message_text("Ini dia daftar 'amunisi' premium kita. Pilih jagoanmu! 👇", reply_markup=InlineKeyboardMarkup(keyboard))
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        # Kirim pesan baru yang berisi daftar produk
+        await context.bot.send_message(
+            chat_id=query.message.chat_id, 
+            text=pesan_produk, 
+            reply_markup=reply_markup
+        )
+
     elif query.data == 'kembali_ke_awal':
-        await query.message.delete(); await start_command(query.message, context)
+        await query.message.delete()
+        await start_command(query.message, context)
+
     elif query.data.startswith('order_'):
         produk_id = query.data.split('_')[1]
         produk = next((p for p in muat_data('products.json') if p['id'] == produk_id), None)
-        if not produk: await query.edit_message_text("Waduh, produknya udah gaib."); return
+        if not produk:
+            await query.edit_message_text("Waduh, produknya udah gaib."); return
+        
         await query.edit_message_text(f"Oke, siap! Pesananmu lagi dibuatin tiketnya... ⏳")
         try:
             external_id = f"skynexio-{produk_id}-{update.effective_user.id}-{int(time.time())}"
