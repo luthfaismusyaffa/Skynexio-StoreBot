@@ -1,4 +1,4 @@
-# main.py - VERSI PERBAIKAN
+# main.py - VERSI FINAL
 
 import os
 import logging
@@ -8,6 +8,7 @@ import time
 from flask import Flask, request, jsonify
 from telegram import Update, Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, ContextTypes, CommandHandler, CallbackQueryHandler
+import xendit # <-- PERBAIKAN: Menambahkan import xendit di sini
 
 # --- KONFIGURASI ---
 # Ambil konfigurasi dari Environment Variables agar aman saat hosting.
@@ -27,11 +28,14 @@ app = Flask(__name__)
 # --- FUNGSI DATABASE & STOK ---
 def muat_data(file_path):
     try:
-        with open(file_path, 'r') as f: return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError): return [] if 's.json' in file_path else {}
+        with open(file_path, 'r') as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return [] if 's.json' in file_path else {}
 
 def simpan_data(data, file_path):
-    with open(file_path, 'w') as f: json.dump(data, f, indent=2)
+    with open(file_path, 'w') as f:
+        json.dump(data, f, indent=2)
 
 def ambil_akun_dari_stok(produk_id):
     products = muat_data('products.json')
@@ -45,12 +49,13 @@ def ambil_akun_dari_stok(produk_id):
 # --- HANDLER TELEGRAM ---
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("🛒 Beli Akun Premium", callback_data='beli_produk')]]
-    await update.message.reply_text("👋 Selamat datang di Skynexio Store! Silakan pilih menu:", reply_markup=InlineKeyboardMarkup(keyboard))
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("👋 Selamat datang di Skynexio Store! Silakan pilih menu:", reply_markup=reply_markup)
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    
+
     if query.data == 'beli_produk':
         products = muat_data('products.json')
         keyboard = []
@@ -60,13 +65,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not keyboard:
             await query.edit_message_text("Mohon maaf, semua produk sedang habis.")
             return
-        await query.edit_message_text("Silakan pilih produk:", reply_markup=InlineKeyboardMarkup(keyboard))
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text("Silakan pilih produk yang Anda inginkan:", reply_markup=reply_markup)
 
     elif query.data.startswith('order_'):
         produk_id = query.data.split('_')[1]
         produk = next((p for p in muat_data('products.json') if p['id'] == produk_id), None)
         if not produk:
-            await query.edit_message_text("Produk tidak ditemukan."); return
+            await query.edit_message_text("Produk tidak ditemukan.")
+            return
 
         await query.edit_message_text(f"⏳ Membuat invoice untuk {produk['nama']}...")
         try:
@@ -87,7 +94,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- WEB SERVER & WEBHOOK ---
 @app.route('/')
-def index(): return "Skynexio Store Bot server is alive!"
+def index():
+    return "Skynexio Store Bot server is alive!"
 
 @app.route('/webhook/xendit', methods=['POST'])
 async def xendit_webhook():
@@ -123,8 +131,6 @@ async def xendit_webhook():
         return jsonify({'status': 'error'}), 500
 
 # --- INISIALISASI APLIKASI TELEGRAM ---
-# Bot akan merespons melalui webhook, jadi kita tidak perlu menjalankan polling di sini.
-# Cukup definisikan aplikasi dan handler-nya. Gunicorn yang akan menjalankan web server (app).
 bot_app = Application.builder().token(TELEGRAM_TOKEN).build()
 bot_app.add_handler(CommandHandler("start", start_command))
 bot_app.add_handler(CallbackQueryHandler(button_handler))
