@@ -1,15 +1,18 @@
-# main.py - VERSI FINAL v2
+# main.py - VERSI FINAL DENGAN WAITRESS
 
 import os
 import logging
 import json
 import asyncio
+import time
 from flask import Flask, request, jsonify
+from waitress import serve
 from telegram import Update, Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, ContextTypes, CommandHandler, CallbackQueryHandler
 import xendit
 
 # --- KONFIGURASI ---
+# Ambil konfigurasi dari Environment Variables di Railway
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID")
 XENDIT_API_KEY = os.environ.get("XENDIT_API_KEY")
@@ -25,7 +28,6 @@ xendit.api_key = XENDIT_API_KEY
 app = Flask(__name__)
 
 # --- INISIALISASI BOT TELEGRAM (SEKALI SAJA) ---
-# Buat instance aplikasi bot di luar fungsi agar bisa diakses bersama
 bot_app = Application.builder().token(TELEGRAM_TOKEN).build()
 
 # --- FUNGSI DATABASE & STOK ---
@@ -100,6 +102,7 @@ def index():
 
 @app.route('/telegram', methods=['POST'])
 async def telegram_webhook():
+    """Endpoint ini menerima update dari Telegram."""
     try:
         await bot_app.process_update(Update.de_json(request.get_json(force=True), bot_app.bot))
         return jsonify({'status': 'ok'})
@@ -109,7 +112,9 @@ async def telegram_webhook():
 
 @app.route('/webhook/xendit', methods=['POST'])
 async def xendit_webhook():
+    """Endpoint ini menerima notifikasi pembayaran dari Xendit."""
     if request.headers.get('x-callback-token') != XENDIT_WEBHOOK_VERIFICATION_TOKEN:
+        logger.warning("Xendit webhook verification failed.")
         return jsonify({'status': 'error', 'message': 'Invalid verification token'}), 403
     
     data = request.json
@@ -135,16 +140,23 @@ async def xendit_webhook():
     
     return jsonify({'status': 'success'}), 200
 
-# Fungsi untuk setup webhook Telegram saat startup
+# --- FUNGSI UNTUK MENJALANKAN KESELURUHAN APLIKASI ---
 async def setup():
+    """Inisialisasi bot dan atur webhook saat server pertama kali jalan."""
     await bot_app.initialize()
     await bot_app.bot.set_webhook(url=f"{WEBHOOK_URL}/telegram", allowed_updates=Update.ALL_TYPES)
     logger.info(f"Telegram webhook berhasil diatur ke {WEBHOOK_URL}/telegram")
 
-# Jalankan setup saat server mulai
-if __name__ != '__main__':
-    loop = asyncio.get_event_loop()
-    if loop.is_running():
-        loop.create_task(setup())
-    else:
-        asyncio.run(setup())
+def main():
+    """Fungsi utama untuk menjalankan setup async dan server web."""
+    # Menjalankan setup bot dalam event loop
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(setup())
+    
+    # Menjalankan server web Flask menggunakan waitress
+    port = int(os.environ.get("PORT", 8080))
+    serve(app, host="0.0.0.0", port=port)
+
+if __name__ == '__main__':
+    main()
