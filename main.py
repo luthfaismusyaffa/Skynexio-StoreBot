@@ -20,7 +20,7 @@ TELEGRAM_TOKEN = "7810672201:AAGmx5O0Tn-rZ2J3s7AU8QToNfrl3DMAo-U"
 ADMIN_CHAT_ID = "7801979990"
 XENDIT_API_KEY = "xnd_development_PMz8LY3LE4GKhCi90pEyblvqqgQFo5TwPcINoX0EdCxQTWxVjF8Gj5mzzRpu85"
 # Buat token rahasia ini sendiri. Ganti dengan teks acak yang panjang dan sulit ditebak.
-XENDIT_WEBHOOK_VERIFICATION_TOKEN = "0000222224444"
+XENDIT_WEBHOOK_VERIFICATION_TOKEN = "vzPZCxszFwaAx6PLQgDv1KcEnm0U4HoZqKY16WPQEhTgT038"
 
 
 # Inisialisasi Logging untuk memantau aktivitas dan error bot.
