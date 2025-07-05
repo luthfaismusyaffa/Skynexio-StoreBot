@@ -7,20 +7,16 @@ import asyncio
 import time
 from flask import Flask, request, jsonify
 from telegram import Update, Bot, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application
-import xendit
+from telegram.ext import Application, ContextTypes, CommandHandler, CallbackQueryHandler
 
 # --- KONFIGURASI ---
-# Kunci-kunci ini diambil dari informasi yang Anda berikan.
-# !!! PERINGATAN PENTING: Kunci-kunci ini sudah terekspos ke publik.
-# WAJIB ganti dengan yang baru setelah bot Anda berhasil di-hosting.
-# Nanti kita akan pindahkan ini ke Environment Variables di Railway agar aman.
-
-TELEGRAM_TOKEN = "7810672201:AAGmx5O0Tn-rZ2J3s7AU8QToNfrl3DMAo-U"
-ADMIN_CHAT_ID = "7801979990"
-XENDIT_API_KEY = "xnd_development_PMz8LY3LE4GKhCi90pEyblvqqgQFo5TwPcINoX0EdCxQTWxVjF8Gj5mzzRpu85"
+# Kunci-kunci ini akan diambil dari Environment Variables di Railway agar aman.
+# Ganti nilai default "GANTI_DENGAN..." dengan kunci asli Anda untuk tes lokal.
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "7810672201:AAGmx5O0Tn-rZ2J3s7AU8QToNfrl3DMAo-U")
+ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID", "7801979990")
+XENDIT_API_KEY = os.environ.get("XENDIT_API_KEY", "xnd_development_PMz8LY3LE4GKhCi90pEyblvqqgQFo5TwPcINoX0EdCxQTWxVjF8Gj5mzzRpu85")
 # Buat token rahasia ini sendiri. Ganti dengan teks acak yang panjang dan sulit ditebak.
-XENDIT_WEBHOOK_VERIFICATION_TOKEN = "vzPZCxszFwaAx6PLQgDv1KcEnm0U4HoZqKY16WPQEhTgT038"
+XENDIT_WEBHOOK_VERIFICATION_TOKEN = os.environ.get("XENDIT_WEBHOOK_VERIFICATION_TOKEN", "vzPZCxszFwaAx6PLQgDv1KcEnm0U4HoZqKY16WPQEhTgT038")
 
 
 # Inisialisasi Logging untuk memantau aktivitas dan error bot.
@@ -65,7 +61,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text("👋 Selamat datang di Skynexio Store! Silakan pilih menu:", reply_markup=reply_markup)
 
-async def button_handler(update: Update, context: application.context_types.DEFAULT_TYPE):
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler untuk semua interaksi tombol inline."""
     query = update.callback_query
     await query.answer()
@@ -150,18 +146,21 @@ async def xendit_webhook():
             
             orders = muat_data('orders.json')
             order_index, order_data = next(
-                ((i, o) for i, o in enumerate(orders) if o.get('external_id') == external_id), 
+                ((i, o) for i, o in enumerate(orders) if o.get('external_id') == external_id and o.get('status') == 'PENDING'), 
                 (None, None)
             )
 
             # Pastikan order ada dan statusnya masih PENDING untuk mencegah proses ganda.
-            if order_data and order_data.get('status') == 'PENDING':
+            if order_data:
                 # Update status order menjadi PAID.
                 orders[order_index]['status'] = 'PAID'
                 simpan_data(orders, 'orders.json')
 
                 # Ambil satu akun dari stok.
                 akun = ambil_akun_dari_stok(order_data['produk_id'])
+                
+                # Inisialisasi bot di dalam scope async untuk mengirim pesan
+                bot = Bot(token=TELEGRAM_TOKEN)
 
                 if akun:
                     # Kirim akun ke pengguna.
@@ -186,7 +185,6 @@ async def xendit_webhook():
 
 # --- Inisialisasi dan Menjalankan Aplikasi ---
 # Buat instance aplikasi bot
-bot = Bot(token=TELEGRAM_TOKEN)
 bot_app = Application.builder().token(TELEGRAM_TOKEN).build()
 # Daftarkan handler
 bot_app.add_handler(CommandHandler("start", start_command))
