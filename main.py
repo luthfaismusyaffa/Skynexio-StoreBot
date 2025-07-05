@@ -15,7 +15,7 @@ import xendit
 # --- KONFIGURASI ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID")
-ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "adminmu")
+ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "@watchingnemo")
 XENDIT_API_KEY = os.environ.get("XENDIT_API_KEY")
 XENDIT_WEBHOOK_VERIFICATION_TOKEN = os.environ.get("XENDIT_WEBHOOK_VERIFICATION_TOKEN")
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
