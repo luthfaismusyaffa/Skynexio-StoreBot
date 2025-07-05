@@ -1,4 +1,4 @@
-# main.py - VERSI FINAL DENGAN STATISTIK
+# main.py - VERSI FINAL DENGAN SEMUA PERBAIKAN
 
 import os
 import logging
@@ -10,6 +10,7 @@ from flask import Flask, request, jsonify
 from waitress import serve
 from telegram import Update, Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, ContextTypes, CommandHandler, CallbackQueryHandler
+import xendit # <-- KESALAHAN ADA DI SINI, BARIS INI HILANG SEBELUMNYA
 
 # --- KONFIGURASI ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -50,9 +51,9 @@ def ambil_akun_dari_stok(produk_id):
 
 # --- HANDLER TELEGRAM ---
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handler untuk /start, sekarang dengan statistik."""
-    # Mekanisme untuk menambah counter secara organik
     counters = muat_data('counter.json')
+    counters.setdefault('total_orders', 5530)
+    counters.setdefault('total_turnover', 54000000)
     counters['total_orders'] += random.randint(1, 3)
     counters['total_turnover'] += random.randint(10000, 50000)
     simpan_data(counters, 'counter.json')
@@ -60,14 +61,13 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("🛒 Lihat Produk Premium", callback_data='beli_produk')]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    # Format angka menjadi format mata uang
     total_orders_formatted = f"{counters['total_orders']:,}"
     total_turnover_formatted = f"Rp{counters['total_turnover']:,}"
     
     pesan_selamat_datang = (
         "**Selamat Datang di Skynexio Store!** ✨\n\n"
         "Pusatnya akun premium untuk segala kebutuhan digitalmu, mulai dari streaming film, musik, sampai tools produktivitas canggih!\n\n"
-        "--- \n"
+        "---\n"
         f"📈 Total Pesanan: **{total_orders_formatted}**\n"
         f"💰 Total Transaksi: **{total_turnover_formatted}**\n"
         "---\n\n"
@@ -81,7 +81,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # (Kode button_handler tetap sama seperti versi sebelumnya, tidak perlu diubah)
     query = update.callback_query
     await query.answer()
     
@@ -119,6 +118,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 customer={'given_names': update.effective_user.full_name}
             )
             orders = muat_data('orders.json')
+            # Simpan juga harga produk untuk update counter
             orders.append({'external_id': external_id, 'user_id': update.effective_user.id, 'produk_id': produk_id, 'harga': produk['harga'], 'status': 'PENDING'})
             simpan_data(orders, 'orders.json')
             pesan_invoice = f"Tiket nontonmu sudah siap! ✅\n\nLakukan pembayaran di kasir sebelah ya (klik link di bawah), jangan sampai telat!\n\n{invoice.invoice_url}"
@@ -135,7 +135,7 @@ bot_app.add_handler(CallbackQueryHandler(button_handler))
 @app.route('/')
 def index(): return "Skynexio Store Bot server is alive and well!"
 
-@app.route(f'/telegram', methods=['POST'])
+@app.route('/telegram', methods=['POST'])
 async def telegram_webhook():
     try:
         await bot_app.initialize()
@@ -191,6 +191,7 @@ def main():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.run_until_complete(setup())
+    
     port = int(os.environ.get("PORT", 8080))
     serve(app, host="0.0.0.0", port=port)
 
