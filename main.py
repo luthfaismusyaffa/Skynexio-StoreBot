@@ -1,4 +1,4 @@
-# main.py - VERSI FINAL (FIXED)
+# main.py - VERSI PERBAIKAN FINAL
 
 import os
 import logging
@@ -7,11 +7,10 @@ import asyncio
 import time
 from flask import Flask, request, jsonify
 from telegram import Update, Bot, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, ContextTypes, CommandHandler, CallbackQueryHandler
+from telegram.ext import Application, ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 import xendit
 
 # --- KONFIGURASI ---
-# Ambil konfigurasi dari Environment Variables di Railway
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID")
 XENDIT_API_KEY = os.environ.get("XENDIT_API_KEY")
@@ -52,7 +51,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    
+
     if query.data == 'beli_produk':
         products = muat_data('products.json')
         keyboard = []
@@ -87,27 +86,30 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Gagal membuat invoice Xendit: {e}")
             await query.edit_message_text("❌ Gagal membuat invoice. Coba lagi nanti.")
 
-# --- INISIALISASI APLIKASI TELEGRAM ---
-# Kita definisikan bot_app di sini agar bisa diakses oleh semua fungsi.
+# --- INISIALISASI BOT (DI LUAR FUNGSI AGAR BISA DIPAKAI BERSAMA) ---
 bot_app = Application.builder().token(TELEGRAM_TOKEN).build()
 bot_app.add_handler(CommandHandler("start", start_command))
 bot_app.add_handler(CallbackQueryHandler(button_handler))
 
 # --- WEB SERVER & WEBHOOK ---
 @app.route('/')
-def index(): return "Skynexio Store Bot server is alive and kicking!"
+def index():
+    return "Skynexio Store Bot server is alive and well!"
 
 @app.route(f'/telegram', methods=['POST'])
 async def telegram_webhook():
-    """Endpoint untuk menerima update dari Telegram."""
-    update_data = request.json
-    update = Update.de_json(update_data, bot_app.bot)
-    await bot_app.process_update(update)
-    return jsonify({'status': 'ok'})
+    """Endpoint ini menerima update dari Telegram."""
+    try:
+        await bot_app.initialize()
+        await bot_app.process_update(Update.de_json(request.get_json(force=True), bot_app.bot))
+        return jsonify({'status': 'ok'})
+    except Exception as e:
+        logger.error(f"Error di webhook Telegram: {e}")
+        return jsonify({'status': 'error'}), 500
 
 @app.route('/webhook/xendit', methods=['POST'])
 async def xendit_webhook():
-    """Endpoint untuk menerima notifikasi pembayaran dari Xendit."""
+    """Endpoint ini menerima notifikasi pembayaran dari Xendit."""
     if request.headers.get('x-callback-token') != XENDIT_WEBHOOK_VERIFICATION_TOKEN:
         logger.warning("Xendit webhook verification failed.")
         return jsonify({'status': 'error', 'message': 'Invalid verification token'}), 403
@@ -135,14 +137,15 @@ async def xendit_webhook():
     
     return jsonify({'status': 'success'}), 200
 
-# --- FUNGSI SETUP SAAT SERVER STARTUP ---
-async def setup_bot():
-    """Inisialisasi bot dan atur webhook saat server pertama kali jalan."""
-    await bot_app.initialize() # <--- PERBAIKAN: Menyalakan bot
-    url = f"{WEBHOOK_URL}/telegram"
-    await bot_app.bot.set_webhook(url=url)
-    logger.info(f"Telegram webhook berhasil diatur ke {url} dan bot telah diinisialisasi.")
+# Fungsi untuk setup webhook Telegram sekali saja (opsional, bisa via curl)
+async def setup():
+    await bot_app.bot.set_webhook(url=f"{WEBHOOK_URL}/telegram", allowed_updates=Update.ALL_TYPES)
+    print(f"Webhook diatur ke {WEBHOOK_URL}/telegram")
 
-# Jalankan setup saat startup aplikasi di lingkungan hosting
-if __name__ != '__main__':
-    asyncio.run(setup_bot())
+if __name__ == '__main__':
+    # Untuk menjalankan setup webhook secara manual sekali saja dari komputer lokal
+    # Pastikan variabel WEBHOOK_URL sudah diatur
+    # asyncio.run(setup())
+    
+    # Untuk menjalankan server secara lokal untuk tes
+    app.run(port=8080)
