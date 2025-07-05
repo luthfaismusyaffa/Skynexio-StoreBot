@@ -1,4 +1,4 @@
-# main.py - VERSI FINAL (FIX KLIK TOMBOL)
+# main.py - VERSI FINAL DENGAN SEMUA PERBAIKAN
 
 import os
 import logging
@@ -10,6 +10,7 @@ from flask import Flask, request, jsonify
 from waitress import serve
 from telegram import Update, Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, ContextTypes, CommandHandler, CallbackQueryHandler
+import xendit # <-- Kunci perbaikan ada di sini
 
 # --- KONFIGURASI ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -155,36 +156,25 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
-    # PERBAIKAN UTAMA ADA DI BLOK INI
     if query.data == 'beli_produk':
-        # Hapus pesan foto sebelumnya
-        await query.message.delete()
-        
+        # PERBAIKAN: Tidak menghapus pesan, tapi mengirim pesan baru
         products = muat_data('products.json')
         keyboard = []
         pesan_produk = "Ini dia daftar 'amunisi' premium kita. Pilih jagoanmu! 👇"
         for p in products:
             if p.get('stok_akun'):
                 keyboard.append([InlineKeyboardButton(f"✅ {p['nama']} - Rp{p['harga']:,}", callback_data=f"order_{p['id']}")])
-        
         if not keyboard:
-            # Kirim pesan baru karena pesan lama sudah dihapus
             await context.bot.send_message(chat_id=query.message.chat_id, text="Yah, amunisi lagi kosong nih. Cek lagi nanti ya! 🙏")
             return
-            
-        keyboard.append([InlineKeyboardButton("⬅️ Kembali", callback_data='kembali_ke_awal')])
+        keyboard.append([InlineKeyboardButton("⬅️ Kembali ke Menu Awal", callback_data='kembali_ke_awal')])
         reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        # Kirim pesan baru yang berisi daftar produk
-        await context.bot.send_message(
-            chat_id=query.message.chat_id, 
-            text=pesan_produk, 
-            reply_markup=reply_markup
-        )
+        await context.bot.send_message(chat_id=query.message.chat_id, text=pesan_produk, reply_markup=reply_markup)
 
     elif query.data == 'kembali_ke_awal':
-        await query.message.delete()
-        await start_command(query.message, context)
+        # Karena kita tidak edit, kita tidak bisa kembali. Arahkan pengguna untuk /start lagi
+        await query.message.reply_text("Silakan ketik /start untuk kembali ke menu utama.")
+
 
     elif query.data.startswith('order_'):
         produk_id = query.data.split('_')[1]
@@ -192,16 +182,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not produk:
             await query.edit_message_text("Waduh, produknya udah gaib."); return
         
-        await query.edit_message_text(f"Oke, siap! Pesananmu lagi dibuatin tiketnya... ⏳")
+        # Kirim pesan baru sebagai ganti edit
+        await context.bot.send_message(chat_id=query.message.chat_id, text=f"Oke, siap! Pesananmu lagi dibuatin tiketnya... ⏳")
         try:
             external_id = f"skynexio-{produk_id}-{update.effective_user.id}-{int(time.time())}"
             invoice = xendit.Invoice.create(external_id=external_id, amount=produk['harga'], description=f"Pembelian {produk['nama']}", customer={'given_names': update.effective_user.full_name})
             orders = muat_data('orders.json')
             orders.append({'external_id': external_id, 'user_id': update.effective_user.id, 'produk_id': produk_id, 'harga': produk['harga'], 'status': 'PENDING'})
             simpan_data(orders, 'orders.json')
-            await query.edit_message_text(f"Tiket nontonmu sudah siap! ✅\n\nKlik link di bawah untuk bayar!\n\n{invoice.invoice_url}")
+            await context.bot.send_message(chat_id=query.message.chat_id, text=f"Tiket nontonmu sudah siap! ✅\n\nKlik link di bawah untuk bayar!\n\n{invoice.invoice_url}")
         except Exception as e:
-            logger.error(f"Gagal buat invoice: {e}"); await query.edit_message_text("❌ Oops, mesin tiketnya ngambek.")
+            logger.error(f"Gagal buat invoice: {e}"); await context.bot.send_message(chat_id=query.message.chat_id, text="❌ Oops, mesin tiketnya ngambek.")
 
 # Daftarkan semua handler
 bot_app.add_handler(CommandHandler("start", start_command))
@@ -215,8 +206,12 @@ def index(): return "Skynexio Store Bot server is alive and well!"
 
 @app.route(f'/telegram', methods=['POST'])
 async def telegram_webhook():
-    try: await bot_app.initialize(); await bot_app.process_update(Update.de_json(request.get_json(force=True), bot_app.bot)); return jsonify({'status': 'ok'})
-    except Exception as e: logger.error(f"Error webhook Telegram: {e}"); return jsonify({'status': 'error'}), 500
+    try:
+        await bot_app.initialize()
+        await bot_app.process_update(Update.de_json(request.get_json(force=True), bot_app.bot))
+        return jsonify({'status': 'ok'})
+    except Exception as e:
+        logger.error(f"Error webhook Telegram: {e}"); return jsonify({'status': 'error'}), 500
 
 @app.route('/webhook/xendit', methods=['POST'])
 async def xendit_webhook():
@@ -227,7 +222,8 @@ async def xendit_webhook():
         orders = muat_data('orders.json')
         order_data = next((o for o in orders if o.get('external_id') == external_id and o.get('status') == 'PENDING'), None)
         if order_data:
-            await bot_app.initialize(); order_data['status'] = 'PAID'
+            await bot_app.initialize()
+            order_data['status'] = 'PAID'
             counters = muat_data('counter.json'); counters['total_orders'] += 1; counters['total_turnover'] += order_data.get('harga', 0)
             simpan_data(counters, 'counter.json'); simpan_data(orders, 'orders.json')
             akun = ambil_akun_dari_stok(order_data['produk_id'])
