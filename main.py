@@ -1,12 +1,15 @@
-# main.py - VERSI FINAL SEDERHANA & STABIL
+# main.py - VERSI FINAL DENGAN IMPORT ASYNCIO
 
 import os
 import logging
+import json
+import asyncio # <-- INI PERBAIKANNYA
 import time
 from flask import Flask, request, jsonify
+from waitress import serve
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
-from xendit import Xendit # Menggunakan library Xendit versi baru
+from xendit import Xendit
 from supabase_client import get_products, get_stock, pop_one_akun, insert_order, update_order_status, get_order_user
 
 # --- KONFIGURASI ---
@@ -18,7 +21,6 @@ XENDIT_WEBHOOK_TOKEN = os.getenv("XENDIT_WEBHOOK_VERIFICATION_TOKEN")
 
 # --- INISIALISASI ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-# Cara baru inisialisasi Xendit
 xendit_client = Xendit(api_key=XENDIT_API_KEY)
 app = Flask(__name__)
 bot_app = Application.builder().token(TELEGRAM_TOKEN).build()
@@ -56,14 +58,13 @@ async def btn_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(f"⏳ Membuat invoice untuk {prod['nama']}...")
         try:
             ext_id = f"invoice__{pid}__{q.from_user.id}__{int(time.time())}"
-            # PERBAIKAN UTAMA: Cara baru membuat invoice
             inv = xendit_client.invoice.create(
                 external_id=ext_id,
                 amount=prod["harga"],
                 description=f"Pembelian {prod['nama']}",
                 customer={
                     "given_names": q.from_user.full_name,
-                    "email": f"{q.from_user.id}@telegram.user" # Email wajib diisi
+                    "email": f"{q.from_user.id}@telegram.user"
                 },
                 success_redirect_url=f"https://t.me/{ctx.bot.username}",
                 failure_redirect_url=f"https://t.me/{ctx.bot.username}"
@@ -102,6 +103,7 @@ async def xendit_hook():
         ext_id = data.get("external_id", "")
 
         if ext_id == "invoice_123124123":
+            logging.info("Webhook tes dari Xendit diterima.")
             return jsonify(ok=True)
 
         if not ext_id.startswith("invoice__"):
@@ -121,7 +123,15 @@ async def xendit_hook():
         user_id = orders[0]["user_id"]
         
         akun_detail = akun['data']
-        pesan_sukses = f"✅ Pembayaran diterima!\nAkun: `{akun_detail.get('detail', 'N/A')}`"
+        tipe = akun_detail.get('tipe', 'private')
+        detail_login = akun_detail.get('detail', 'N/A')
+        
+        pesan_akun = f"Login: `{detail_login}`"
+        if tipe == 'sharing':
+            pesan_akun += f"\nProfil: **{akun_detail.get('profil', 'N/A')}**"
+            pesan_akun += f"\nPIN: `{akun_detail.get('pin', 'N/A')}`"
+
+        pesan_sukses = f"✅ Pembayaran diterima!\n\nBerikut detail akun Anda:\n{pesan_akun}"
 
         await bot_app.bot.send_message(user_id, pesan_sukses, parse_mode="Markdown")
         await bot_app.bot.send_message(ADMIN_CHAT_ID, f"Penjualan sukses: {pid}")
@@ -139,5 +149,10 @@ async def setup():
     await bot_app.bot.set_my_commands([BotCommand("start", "Mulai bot")])
     logging.info("Bot webhook & commands berhasil diatur.")
 
-# Menjalankan setup async sebelum server Flask dimulai
-asyncio.run(setup())
+def main():
+    asyncio.run(setup())
+    port = int(os.getenv("PORT", 8080))
+    serve(app, host="0.0.0.0", port=port)
+
+if __name__ == "__main__":
+    main()
