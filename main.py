@@ -1,6 +1,6 @@
 import os, logging, time, asyncio
 from flask import Flask, request, jsonify
-from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 import requests, xendit
 from supabase_client import (
@@ -8,7 +8,6 @@ from supabase_client import (
     insert_order, update_order_status, get_order_user
 )
 
-# ENV
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
@@ -17,20 +16,17 @@ XENDIT_WEBHOOK_TOKEN = os.getenv("XENDIT_WEBHOOK_VERIFICATION_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-# Init
 xendit.api_key = XENDIT_API_KEY
 app = Flask(__name__)
 bot_app = Application.builder().token(TELEGRAM_TOKEN).build()
 logging.basicConfig(level=logging.INFO)
 
 
-def is_admin(update):
-    return str(update.effective_user.id) == ADMIN_CHAT_ID
+def is_admin(update): return str(update.effective_user.id) == ADMIN_CHAT_ID
 
 
 async def new_product(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update):
-        return
+    if not is_admin(update): return
     try:
         i, n, h, d = [x.strip() for x in " ".join(ctx.args).split("|", 3)]
         headers = {
@@ -42,13 +38,12 @@ async def new_product(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                       json={"id": i, "nama": n, "harga": int(h), "deskripsi": d})
         await update.message.reply_text(f"✅ Produk '{n}' berhasil ditambahkan.")
     except Exception as e:
-        logging.error(f"new_product: {e}")
+        logging.exception("new_product error")
         await update.message.reply_text("Format: /newproduct id|nama|harga|deskripsi")
 
 
 async def add_stock(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update):
-        return
+    if not is_admin(update): return
     try:
         pid = ctx.args[0]
         detail = " ".join(ctx.args[1:])
@@ -58,16 +53,15 @@ async def add_stock(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "Content-Type": "application/json"
         }
         requests.post(f"{SUPABASE_URL}/rest/v1/stok_akun", headers=headers,
-                      json={"produk_id": pid, "detail": detail, "sold": False})
+                      json={"produk_id": pid, "detail": detail, "is_sold": False})
         await update.message.reply_text(f"✅ Stok akun untuk produk `{pid}` bertambah.")
     except Exception as e:
-        logging.error(f"add_stock: {e}")
+        logging.exception("add_stock error")
         await update.message.reply_text("Format: /add <produk_id> <akun_detail>")
 
 
 async def info_stock(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update):
-        return
+    if not is_admin(update): return
     teks = "📦 Stok Produk:\n"
     for p in get_products():
         stok = get_stock(p["id"])
@@ -94,8 +88,7 @@ async def btn_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif q.data.startswith("buy__"):
         pid = q.data.split("__", 1)[1]
         prod = next((p for p in get_products() if p["id"] == pid), None)
-        if not prod:
-            return await q.edit_message_text("Stok habis 😢")
+        if not prod: return await q.edit_message_text("Stok habis 😢")
         ext = f"invoice__{pid}__{q.from_user.id}__{int(time.time())}"
         inv = xendit.Invoice.create(
             external_id=ext,
@@ -123,9 +116,11 @@ def telegram_webhook():
 
 @app.route("/webhook/xendit", methods=["POST"])
 def xendit_hook():
+    logging.info("Xendit webhook called")
     if request.headers.get("x-callback-token") != XENDIT_WEBHOOK_TOKEN:
         return "forbidden", 403
     d = request.get_json()
+    logging.info(f"Webhook body: {d}")
     if d.get("status") == "PAID":
         ext = d["external_id"]
         if not ext.startswith("invoice__"):
