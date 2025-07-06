@@ -1,131 +1,155 @@
-# main.py - Skynexio Store Bot terintegrasi dengan Supabase
-
-import os
-import logging
-import json
-import asyncio
-import time
-import random
+import os, logging, json, time, random, asyncio
 from flask import Flask, request, jsonify
-from waitress import serve
-from telegram import Update, Bot, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
+from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler, filters
-from supabase import create_client, Client
 import xendit
+from supabase import create_client, Client
 
-# --- KONFIGURASI ---
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID")
-ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "username_admin_anda")
-XENDIT_API_KEY = os.environ.get("XENDIT_API_KEY")
-XENDIT_WEBHOOK_VERIFICATION_TOKEN = os.environ.get("XENDIT_WEBHOOK_VERIFICATION_TOKEN")
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
-SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+# — ENV/INIT
+TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
+ADMIN_CHAT_ID = os.environ["ADMIN_CHAT_ID"]
+ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "@watchingnemo")
+XENDIT_API_KEY = os.environ["XENDIT_API_KEY"]
+XENDIT_WEBHOOK_TOKEN = os.environ["XENDIT_WEBHOOK_VERIFICATION_TOKEN"]
+WEBHOOK_URL = os.environ["WEBHOOK_URL"]
+LOGO_URL = os.environ.get("LOGO_URL", "https://i.imgur.com/default-logo.png")
+SUPABASE_URL = os.environ["SUPABASE_URL"]
+SUPABASE_KEY = os.environ["SUPABASE_KEY"]
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 xendit.api_key = XENDIT_API_KEY
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+app = Flask(__name__)
+bot = Application.builder().token(TELEGRAM_TOKEN).build()
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-app = Flask(__name__)
-bot_app = Application.builder().token(TELEGRAM_TOKEN).build()
 
-# --- UTILITY ---
-def fmt_rp(n): return f"Rp{n:,}".replace(",", ".")
+# — FUNGSI DATABASE
+def get_products():
+    data = supabase.table("products").select("*").execute()
+    return data.data or []
 
-# --- HANDLER BOT ---
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    counters = supabase.table("counters").select("*").limit(1).execute().data
-    if not counters:
-        supabase.table("counters").insert({"total_orders": 5561, "total_turnover": 54000000}).execute()
-        total_orders, total_turnover = 5561, 54000000
-    else:
-        total_orders, total_turnover = counters[0]['total_orders'], counters[0]['total_turnover']
-        supabase.table("counters").update({
-            "total_orders": total_orders + random.randint(1, 3)
-        }).eq("id", counters[0]['id']).execute()
+def get_stock(produk_id):
+    data = supabase.table("stok_akun").select("*").eq("produk_id", produk_id).execute()
+    return data.data or []
 
-    keyboard = [[InlineKeyboardButton("✅ Cek Stok Ready", callback_data='cek_stok')]]
-    await update.message.reply_text(
-        f"**Selamat Datang di Skynexio Store!**\n\n"
-        f"📈 Total Pesanan Dilayani: {total_orders:,}\n"
-        f"💰 Total Transaksi: {fmt_rp(total_turnover)}\n\n"
-        "Kami siap melayani Anda 24/7 dengan proses instan.",
-        parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+def pop_one_akun(produk_id):
+    stok = get_stock(produk_id)
+    if not stok: return None
+    akun = stok[0]
+    # hapus entry
+    supabase.table("stok_akun").delete().eq("id", akun["id"]).execute()
+    return akun
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query; await query.answer()
-    chat_id = query.message.chat_id
-    if query.data == 'cek_stok':
-        products = supabase.table("products").select("*").execute().data
-        stok = supabase.table("stok_akun").select("produk_id", count="exact").execute().data
-        stok_map = {s['produk_id']: s['count'] for s in stok if s['count'] > 0}
-        keyboard = [[InlineKeyboardButton(f"{p['nama']} - {fmt_rp(p['harga'])}", callback_data=f"order_{p['id']}")
-                     for p in products if p['id'] in stok_map]]
-        await context.bot.send_message(chat_id=chat_id, text="Pilih produk:", reply_markup=InlineKeyboardMarkup(keyboard))
-    elif query.data.startswith('order_'):
-        produk_id = query.data.split('_')[1]
-        produk = supabase.table("products").select("*").eq("id", produk_id).execute().data
-        if not produk:
-            await context.bot.send_message(chat_id, "Produk tidak ditemukan.")
-            return
-        produk = produk[0]
-        external_id = f"skynexio-{produk_id}-{update.effective_user.id}-{int(time.time())}"
-        invoice = xendit.Invoice.create(external_id=external_id, amount=produk['harga'],
-                                        description=produk['nama'], customer={'given_names': update.effective_user.full_name})
-        supabase.table("orders").insert({
-            "external_id": external_id,
-            "produk_id": produk_id,
-            "user_id": update.effective_user.id,
-            "harga": produk['harga'],
-            "status": "PENDING"
-        }).execute()
-        await query.edit_message_text(f"Tiketmu siap! Klik link bayar:
-{invoice.invoice_url}")
+def insert_order(external_id, user_id, produk_id, harga):
+    return supabase.table("orders").insert({
+        "external_id": external_id,
+        "user_id": user_id,
+        "produk_id": produk_id,
+        "harga": harga
+    }).execute()
 
-@app.route('/')
-def index(): return "Bot aktif."
+# — FUNGSI ADMIN
+def is_admin(update: Update):
+    return str(update.effective_user.id) == ADMIN_CHAT_ID
 
-@app.route('/telegram', methods=['POST'])
-async def telegram_webhook():
+async def new_product(update: Update, ctx):
+    if not is_admin(update): return
+    args = " ".join(ctx.args).split("|")
+    if len(args)<4: return await update.message.reply_text("Format: /newproduct id|nama|harga|deskripsi")
+    idp,n,h,d = [x.strip() for x in args]
+    supabase.table("products").insert({"id":idp,"nama":n,"harga":int(h),"deskripsi":d}).execute()
+    await update.message.reply_text(f"✅ Produk '{n}' ditambahkan.")
+
+async def add_stock(update: Update, ctx):
+    if not is_admin(update): return
     try:
-        await bot_app.initialize()
-        await bot_app.process_update(Update.de_json(request.get_json(force=True), bot_app.bot))
-        return jsonify({'status': 'ok'})
-    except Exception as e:
-        logger.error(f"Webhook error: {e}")
-        return jsonify({'status': 'error'}), 500
+        pid = ctx.args[0]; akun = " ".join(ctx.args[1:])
+        supabase.table("stok_akun").insert({"produk_id": pid, "detail": akun}).execute()
+        await update.message.reply_text(f"✅ Stok akun ditambahkan ke '{pid}'.")
+    except:
+        return await update.message.reply_text("Format: /add <produk_id> <akun_detail>")
 
-@app.route('/webhook/xendit', methods=['POST'])
-async def xendit_webhook():
-    if request.headers.get('x-callback-token') != XENDIT_WEBHOOK_VERIFICATION_TOKEN:
-        return jsonify({'status': 'unauthorized'}), 403
-    data = request.get_json()
-    if data.get("status") == "PAID":
-        ext_id = data.get("external_id")
-        order = supabase.table("orders").select("*").eq("external_id", ext_id).execute().data
-        if not order: return jsonify({'status': 'not found'}), 404
-        order = order[0]
-        supabase.table("orders").update({"status": "PAID"}).eq("external_id", ext_id).execute()
-        stok = supabase.table("stok_akun").select("*").eq("produk_id", order['produk_id']).limit(1).execute().data
-        if stok:
-            akun = stok[0]['data']; akun_id = stok[0]['id']
-            supabase.table("stok_akun").delete().eq("id", akun_id).execute()
-            await bot_app.bot.send_message(order['user_id'], f"✅ Ini akun kamu:\n{akun}")
-            await bot_app.bot.send_message(ADMIN_CHAT_ID, f"✅ Order dari {order['user_id']} berhasil. Produk: {order['produk_id']}\n{akun}")
-        else:
-            await bot_app.bot.send_message(order['user_id'], "✅ Bayar berhasil tapi stok kosong. Admin akan kirim manual.")
-    return jsonify({'status': 'success'})
+async def info_stock(update: Update, ctx):
+    if not is_admin(update): return
+    rows = get_products()
+    teks = "📦 Stok Produk:\n"
+    for p in rows:
+        stok = len(get_stock(p["id"]))
+        teks += f"- {p['nama']} (`{p['id']}`): {stok} akun\n"
+    await update.message.reply_text(teks)
 
+# — HANDLER PENGGUNA
+async def start(update: Update, ctx):
+    rows = get_products()
+    teks = f"**Selamat datang!** Silakan cek stok produk..."
+    btn = [[InlineKeyboardButton("✅ Cek Stok", callback_data="cek")]]
+    await update.message.reply_photo(photo=LOGO_URL, caption=teks, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(btn))
+
+async def btn_handler(update: Update, ctx):
+    q = update.callback_query; await q.answer()
+    if q.data=="cek":
+        rows = get_products()
+        btns = [[InlineKeyboardButton(f"{p['nama']} - Rp{p['harga']}", callback_data=f"buy_{p['id']}")] for p in rows if get_stock(p["id"])]
+        btns.append([InlineKeyboardButton("↩️ Kembali", callback_data="back")])
+        await q.edit_message_text("Pilih produk:", reply_markup=InlineKeyboardMarkup(btns))
+    elif q.data.startswith("buy_"):
+        pid = q.data.split("_",1)[1]
+        prod = next((p for p in get_products() if p["id"]==pid), None)
+        if not prod: return await q.edit_message_text("Stok habis 😢")
+        await q.edit_message_text("Membuat invoice...")
+        ext = f"order-{pid}-{q.from_user.id}-{int(time.time())}"
+        inv = xendit.Invoice.create(external_id=ext,amount=prod["harga"],description=prod["nama"],customer={"given_names":q.from_user.full_name})
+        insert_order(ext,q.from_user.id,pid,prod["harga"])
+        await q.edit_message_text(f"✅ Invoice siap!\n{inv.invoice_url}")
+    elif q.data=="back":
+        return await start(update, ctx)
+
+async def text_handler(update: Update, ctx):
+    return await update.message.reply_text("Ketik /start untuk mulai.")
+
+# — WEBHOOKS
+@app.route("/", methods=["GET"])
+def home(): return "OK"
+
+@app.route("/telegram", methods=["POST"])
+async def tg_webhook():
+    upd = Update.de_json(request.get_json(force=True), bot.bot)
+    await bot.initialize(); await bot.process_update(upd)
+    return jsonify(ok=True)
+
+@app.route("/webhook/xendit", methods=["POST"])
+def xi_webhook():
+    if request.headers.get("x-callback-token")!=XENDIT_WEBHOOK_TOKEN:
+        return "forbidden",403
+    d = request.json
+    if d.get("status")=="PAID":
+        supabase.table("orders").update({"status":"PAID"}).eq("external_id",d["external_id"]).execute()
+        akun = pop_one_akun(d["external_id"].split("-")[1])
+        chatid = supabase.table("orders").select("user_id").eq("external_id",d["external_id"]).execute().data[0]["user_id"]
+        msg = f"✅ Pembayaran diterima!\nAkun kamu: `{akun['detail']}`"
+        bot.bot.send_message(chatid, msg, parse_mode="Markdown")
+    return jsonify(ok=True)
+
+# — INIT BOT
 async def setup():
-    await bot_app.initialize()
-    await bot_app.bot.set_webhook(f"{WEBHOOK_URL}/telegram")
-    await bot_app.bot.set_my_commands([BotCommand("start", "Mulai bot")])
+    for cmd in ["/start","/newproduct","/add","/infostock"]: 
+        await bot.bot.set_my_commands([BotCommand(cmd,"")])
+    bot.add_handler(CommandHandler("start", start))
+    bot.add_handler(CommandHandler("newproduct", new_product))
+    bot.add_handler(CommandHandler("add", add_stock))
+    bot.add_handler(CommandHandler("infostock", info_stock))
+    bot.add_handler(CallbackQueryHandler(btn_handler))
+    bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
+    await bot.initialize()
+    await bot.bot.set_webhook(WEBHOOK_URL+"/telegram", allowed_updates=Update.ALL_TYPES)
 
 def main():
-    loop = asyncio.new_event_loop(); asyncio.set_event_loop(loop)
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     loop.run_until_complete(setup())
-    serve(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+    from waitress import serve
+    serve(app, host="0.0.0.0", port=int(os.environ.get("PORT",8080)))
 
-if __name__ == '__main__':
+if __name__=="__main__":
     main()
