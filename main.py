@@ -1,12 +1,9 @@
-# main.py - VERSI FINAL DENGAN PERBAIKAN ASYNCIO
+# main.py - VERSI FINAL UNTUK GUNICORN + UVICORN
 
 import os
 import logging
-import json
 import asyncio
-import time
 from flask import Flask, request, jsonify
-from waitress import serve
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from xendit import Xendit
@@ -97,16 +94,16 @@ async def xendit_hook():
     d = request.get_json()
     logging.info(f"Xendit webhook diterima: {d}")
 
-    # Cek jika ini adalah tes dari dashboard Xendit
-    if d.get("external_id") == "invoice_123124123":
-        logging.info("Webhook tes dari Xendit diterima, merespons sukses.")
-        return jsonify(ok=True)
-
-    # Cek jika event dari Xendit adalah "invoice paid"
     event_type = d.get("event")
-    if event_type == "invoice.paid":
-        data = d.get("data", {})
+    # Logika baru untuk menangani format webhook yang berbeda
+    if event_type == "invoice.paid" or d.get("status") == "PAID":
+        data = d.get("data", d) # Ambil 'data' jika ada, jika tidak, ambil seluruh body
         ext_id = data.get("external_id", "")
+
+        if ext_id == "invoice_123124123":
+            logging.info("Webhook tes dari Xendit diterima.")
+            return jsonify(ok=True)
+
         if not ext_id.startswith("invoice__"):
             return jsonify({"error": "Invalid external_id"}), 400
         
@@ -118,7 +115,6 @@ async def xendit_hook():
         akun = pop_one_akun(pid)
         
         if not akun:
-            logging.error(f"Stok habis untuk produk: {pid} pada order: {ext_id}")
             return {"error": "No stock"}, 400
         
         update_order_status(ext_id, akun_id=akun["id"])
@@ -140,9 +136,8 @@ async def xendit_hook():
         
     return jsonify(ok=True)
 
-# --- SETUP & RUN ---
+# --- SETUP ---
 async def setup():
-    """Mengatur semua handler dan webhook bot."""
     bot_app.add_handler(CommandHandler("start", start))
     bot_app.add_handler(CallbackQueryHandler(btn_handler))
     bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
@@ -152,14 +147,10 @@ async def setup():
     await bot_app.bot.set_my_commands([BotCommand("start", "Mulai bot")])
     logging.info("Bot webhook & commands berhasil diatur.")
 
-def main():
-    """Fungsi utama untuk menjalankan setup async dan server web."""
-    # PERBAIKAN: Cara yang lebih modern dan simpel untuk menjalankan setup async
-    asyncio.run(setup())
-    
-    # Menjalankan server web Flask menggunakan waitress
-    port = int(os.getenv("PORT", 8080))
-    serve(app, host="0.0.0.0", port=port)
-
-if __name__ == "__main__":
-    main()
+# Jalankan setup saat server mulai
+if __name__ != 'main':
+    loop = asyncio.get_event_loop()
+    if loop.is_running():
+        loop.create_task(setup())
+    else:
+        asyncio.run(setup())
