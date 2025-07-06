@@ -1,137 +1,156 @@
+# main.py
 import os
 import json
-import asyncio
-import time
 import logging
-from fastapi import FastAPI, Request, HTTPException
+import time
+import random
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 import xendit
 
-# --- Konfigurasi lingkungan ---
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
-ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "@admin")
-XENDIT_API_KEY = os.getenv("XENDIT_API_KEY")
-XENDIT_WEBHOOK_VERIFICATION_TOKEN = os.getenv("XENDIT_WEBHOOK_VERIFICATION_TOKEN")
-LOGO_URL = os.getenv("LOGO_URL", "https://i.imgur.com/default-logo.png")
+# --- Konfigurasi ---
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID")
+ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "@admin")
+XENDIT_API_KEY = os.environ.get("XENDIT_API_KEY")
+XENDIT_WEBHOOK_VERIFICATION_TOKEN = os.environ.get("XENDIT_WEBHOOK_VERIFICATION_TOKEN")
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
+LOGO_URL = os.environ.get("LOGO_URL", "https://i.imgur.com/default-logo.png")
 
-# --- Logging ---
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("main")
+logger = logging.getLogger(__name__)
 
-xendit.api_key = XENDIT_API_KEY
 app = FastAPI()
 bot_app = Application.builder().token(TELEGRAM_TOKEN).build()
+xendit.api_key = XENDIT_API_KEY
 
-# --- Fungsi bantu ---
-def muat_data(file_path):
+# --- Helper JSON ---
+def load_json(file):
     try:
-        with open(file_path, "r") as f:
+        with open(file, 'r') as f:
             return json.load(f)
     except:
         return []
 
-def simpan_data(data, file_path):
-    with open(file_path, "w") as f:
-        json.dump(data, f, indent=2)
+def save_json(data, file):
+    with open(file, 'w') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
 
-def ambil_akun_dari_stok(produk_id):
-    products = muat_data("products.json")
-    for p in products:
-        if p['id'] == produk_id and p.get('stok_akun'):
-            akun = p['stok_akun'].pop(0)
-            simpan_data(products, "products.json")
+def ambil_akun(produk_id):
+    data = load_json("products.json")
+    for produk in data:
+        if produk['id'] == produk_id and produk.get('stok_akun'):
+            akun = produk['stok_akun'].pop(0)
+            save_json(data, "products.json")
             return akun
     return None
 
-def is_admin(update: Update):
-    return str(update.effective_user.id) == ADMIN_CHAT_ID
+# --- Command Handler ---
+async def start(update, context):
+    counters = load_json("counter.json")
+    counters.setdefault('total_orders', 500)
+    counters.setdefault('total_turnover', 1000000)
+    counters['total_orders'] += random.randint(1, 3)
+    save_json(counters, "counter.json")
 
-# --- Command handler ---
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("✅ Cek Stok", callback_data="cek_stok")]]
-    await update.message.reply_photo(
-        photo=LOGO_URL,
-        caption="Selamat datang! Klik tombol di bawah.",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
-    )
+    text = (f"**Selamat datang di Skynexio Store!**\n\n"
+            f"📈 Total Pesanan: **{counters['total_orders']}**\n"
+            f"💰 Total Transaksi: **Rp{counters['total_turnover']:,}**\n\n"
+            "Klik tombol di bawah untuk mulai.")
 
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Silakan ketik /start untuk memulai.")
+    await update.message.reply_photo(photo=LOGO_URL, caption=text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_text(update, context):
+    await update.message.reply_text("Ketik /start untuk memulai")
+
+async def button(update, context):
     query = update.callback_query
     await query.answer()
-    if query.data == "cek_stok":
-        products = muat_data("products.json")
-        keyboard = []
-        for p in products:
-            if p.get("stok_akun"):
-                keyboard.append([
-                    InlineKeyboardButton(f"{p['nama']} - Rp{p['harga']:,}", callback_data=f"order_{p['id']}")
-                ])
-        await query.edit_message_text("Pilih produk:", reply_markup=InlineKeyboardMarkup(keyboard))
-    elif query.data.startswith("order_"):
-        produk_id = query.data.split("_")[1]
-        produk = next((p for p in muat_data("products.json") if p['id'] == produk_id), None)
-        if not produk:
-            await query.edit_message_text("Produk tidak ditemukan atau stok habis.")
-            return
-        invoice = xendit.Invoice.create(
-            external_id=f"inv_{int(time.time())}",
-            amount=produk['harga'],
-            description=produk['nama'],
-            customer={'given_names': update.effective_user.full_name}
-        )
-        orders = muat_data("orders.json")
-        orders.append({
-            "external_id": invoice.external_id,
-            "user_id": update.effective_user.id,
-            "produk_id": produk_id,
-            "harga": produk['harga'],
-            "status": "PENDING"
-        })
-        simpan_data(orders, "orders.json")
-        await context.bot.send_message(update.effective_user.id, f"Bayar di sini:
-{invoice.invoice_url}")
+    data = query.data
+    chat_id = query.message.chat.id
 
-# --- Telegram webhook route ---
+    if data == "cek_stok":
+        produk = load_json("products.json")
+        keyboard = []
+        for p in produk:
+            if p.get("stok_akun"):
+                keyboard.append([InlineKeyboardButton(f"{p['nama']} - Rp{p['harga']:,}", callback_data=f"order_{p['id']}")])
+        keyboard.append([InlineKeyboardButton("⬅️ Kembali", callback_data="kembali")])
+        await query.edit_message_text("Silakan pilih produk:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    elif data.startswith("order_"):
+        produk_id = data.split("_", 1)[1]
+        produk = next((p for p in load_json("products.json") if p['id'] == produk_id), None)
+        if not produk:
+            await query.edit_message_text("Stok habis atau produk tidak ditemukan.")
+            return
+
+        await query.edit_message_text("Sedang membuat invoice...")
+        try:
+            external_id = f"order-{produk_id}-{update.effective_user.id}-{int(time.time())}"
+            invoice = xendit.Invoice.create(
+                external_id=external_id,
+                amount=produk['harga'],
+                description=produk['nama'],
+                customer={'given_names': update.effective_user.full_name}
+            )
+            orders = load_json("orders.json")
+            orders.append({"external_id": external_id, "user_id": update.effective_user.id, "produk_id": produk_id, "status": "PENDING", "harga": produk['harga']})
+            save_json(orders, "orders.json")
+            await context.bot.send_message(chat_id, f"Link pembayaran:
+{invoice.invoice_url}")
+        except Exception as e:
+            logger.error(e)
+            await query.edit_message_text("Gagal membuat invoice.")
+
+    elif data == "kembali":
+        await query.message.delete()
+        class Fake:
+            def __init__(self, m): self.message = m
+        await start(Fake(query.message), context)
+
+# --- Telegram Webhook Endpoint ---
 @app.post("/telegram")
 async def telegram_webhook(request: Request):
-    data = await request.json()
-    update = Update.de_json(data, bot_app.bot)
-    asyncio.create_task(bot_app.process_update(update))
-    return JSONResponse(content={"status": "ok"})
+    try:
+        data = await request.json()
+        update = Update.de_json(data, bot_app.bot)
+        await bot_app.initialize()
+        await bot_app.process_update(update)
+        return {"status": "ok"}
+    except Exception as e:
+        logger.error(f"Telegram webhook error: {e}")
+        return {"status": "error"}
 
-# --- Xendit webhook route ---
+# --- Xendit Webhook Endpoint ---
 @app.post("/webhook/xendit")
 async def xendit_webhook(request: Request):
     if request.headers.get("x-callback-token") != XENDIT_WEBHOOK_VERIFICATION_TOKEN:
-        raise HTTPException(status_code=403, detail="Invalid token")
+        return JSONResponse(status_code=403, content={"status": "forbidden"})
+
     data = await request.json()
     if data.get("status") == "PAID":
         external_id = data.get("external_id")
-        orders = muat_data("orders.json")
+        orders = load_json("orders.json")
         order = next((o for o in orders if o['external_id'] == external_id and o['status'] == "PENDING"), None)
         if order:
-            order['status'] = 'PAID'
-            simpan_data(orders, "orders.json")
-            akun = ambil_akun_dari_stok(order['produk_id'])
+            order['status'] = "PAID"
+            save_json(orders, "orders.json")
+            akun = ambil_akun(order['produk_id'])
             if akun:
-                await bot_app.bot.send_message(order['user_id'], f"✅ Pembayaran berhasil! Berikut akunmu: `{akun}`", parse_mode='Markdown')
+                await bot_app.bot.send_message(order['user_id'], f"✅ Pembayaran berhasil! Berikut akun kamu:
+`{akun}`", parse_mode="Markdown")
+                await bot_app.bot.send_message(ADMIN_CHAT_ID, f"✅ Pesanan baru dibayar!\nAkun: {akun}")
             else:
-                await bot_app.bot.send_message(order['user_id'], "Stok habis. Admin akan hubungi kamu segera.")
+                await bot_app.bot.send_message(order['user_id'], "Pembayaran berhasil, tapi stok kosong. Admin akan hubungi kamu segera.")
     return {"status": "ok"}
 
-# --- Setup handlers dan webhook ---
-@app.on_event("startup")
-async def startup():
-    bot_app.add_handler(CommandHandler("start", start))
-    bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    bot_app.add_handler(CallbackQueryHandler(button_handler))
-    await bot_app.initialize()
-    await bot_app.bot.set_webhook(os.getenv("WEBHOOK_URL") + "/telegram")
-    await bot_app.bot.set_my_commands([BotCommand("start", "Mulai bot")])
+# --- Setup ---
+bot_app.add_handler(CommandHandler("start", start))
+bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+bot_app.add_handler(CallbackQueryHandler(button))
+
+# --- Jalankan: uvicorn main:app (Procfile) ---
