@@ -1,4 +1,3 @@
 # nixpacks.toml
-
 [start]
-cmd = "gunicorn main:app"
+cmd = "gunicorn 'main:app' --worker-class uvicorn.workers.UvicornWorker"
