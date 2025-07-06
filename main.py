@@ -1,4 +1,4 @@
-# main.py
+# main.py - VERSI FINAL DENGAN LIBRARY XENDIT BARU
 
 import os
 import logging
@@ -8,7 +8,7 @@ from flask import Flask, request, jsonify
 from waitress import serve
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
-import xendit
+from xendit import Xendit
 from supabase_client import get_products, get_stock, pop_one_akun, insert_order, update_order_status, get_order_user
 
 # --- KONFIGURASI ---
@@ -20,7 +20,8 @@ XENDIT_WEBHOOK_TOKEN = os.getenv("XENDIT_WEBHOOK_VERIFICATION_TOKEN")
 
 # --- INISIALISASI ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-xendit.api_key = XENDIT_API_KEY
+# PERUBAHAN: Cara baru inisialisasi Xendit
+xendit_client = Xendit(api_key=XENDIT_API_KEY)
 app = Flask(__name__)
 bot_app = Application.builder().token(TELEGRAM_TOKEN).build()
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -37,7 +38,6 @@ async def btn_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if q.data == "cek_stok":
         try:
             products = get_products()
-            # Filter produk yang stoknya > 0
             rows = [p for p in products if get_stock(p["id"])]
             if not rows:
                 return await q.edit_message_text("Maaf, semua produk sedang habis 😢")
@@ -58,11 +58,17 @@ async def btn_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(f"⏳ Membuat invoice untuk {prod['nama']}...")
         try:
             ext_id = f"invoice__{pid}__{q.from_user.id}__{int(time.time())}"
-            inv = xendit.Invoice.create(
+            # PERUBAHAN: Cara baru membuat invoice
+            inv = xendit_client.invoice.create(
                 external_id=ext_id,
                 amount=prod["harga"],
-                description=prod["nama"],
-                customer={"given_names": q.from_user.full_name},
+                description=f"Pembelian {prod['nama']}",
+                customer={
+                    "given_names": q.from_user.full_name,
+                    "email": f"{q.from_user.id}@telegram.user"
+                },
+                success_redirect_url=f"https://t.me/{ctx.bot.username}",
+                failure_redirect_url=f"https://t.me/{ctx.bot.username}"
             )
             insert_order(ext_id, q.from_user.id, pid, prod["harga"])
             await q.edit_message_text(f"✅ Invoice berhasil dibuat!\nSilakan selesaikan pembayaran melalui link berikut:\n\n{inv.invoice_url}")
@@ -93,11 +99,10 @@ async def xendit_hook():
     logging.info(f"Xendit webhook diterima: {d}")
 
     if d.get("external_id") == "invoice_123124123":
-        logging.info("Webhook tes dari Xendit diterima, merespons sukses.")
         return jsonify(ok=True)
 
     if d.get("status") == "PAID":
-        ext_id = d.get("external_id", "")
+        ext_id = d.get("data", {}).get("external_id", "")
         if not ext_id.startswith("invoice__"):
             return jsonify({"error": "Invalid external_id"}), 400
         
@@ -115,16 +120,14 @@ async def xendit_hook():
         update_order_status(ext_id, akun_id=akun["id"])
         user_id = orders[0]["user_id"]
         
-        # Format pesan berdasarkan data jsonb
         akun_detail = akun['data']
         tipe = akun_detail.get('tipe', 'private')
         detail_login = akun_detail.get('detail', 'N/A')
         
         pesan_akun = f"Login: `{detail_login}`"
         if tipe == 'sharing':
-            profil = akun_detail.get('profil', 'N/A')
-            pin = akun_detail.get('pin', 'N/A')
-            pesan_akun += f"\nProfil: **{profil}**\nPIN: `{pin}`"
+            pesan_akun += f"\nProfil: **{akun_detail.get('profil', 'N/A')}**"
+            pesan_akun += f"\nPIN: `{akun_detail.get('pin', 'N/A')}`"
 
         pesan_sukses = f"✅ Pembayaran diterima!\n\nBerikut detail akun Anda:\n{pesan_akun}"
 
