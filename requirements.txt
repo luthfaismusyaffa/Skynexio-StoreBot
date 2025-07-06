@@ -2,4 +2,6 @@ flask
 python-telegram-bot
 xendit
 requests
+waitress
 gunicorn
+uvicorn
