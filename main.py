@@ -1,17 +1,17 @@
-import os, logging, json, time, random, asyncio
+import os, logging, json, time, asyncio
 from flask import Flask, request, jsonify
 from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler, filters
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
 import xendit
 from supabase_client import get_products, get_stock, pop_one_akun, insert_order, update_order_status, get_order_user
 
-# — ENV/INIT
-TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
-ADMIN_CHAT_ID = os.environ["ADMIN_CHAT_ID"]
-XENDIT_API_KEY = os.environ["XENDIT_API_KEY"]
-XENDIT_WEBHOOK_TOKEN = os.environ["XENDIT_WEBHOOK_VERIFICATION_TOKEN"]
-WEBHOOK_URL = os.environ["WEBHOOK_URL"]
-LOGO_URL = os.environ.get("LOGO_URL", "https://i.imgur.com/default-logo.png")
+# ENV
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
+XENDIT_API_KEY = os.getenv("XENDIT_API_KEY")
+XENDIT_WEBHOOK_TOKEN = os.getenv("XENDIT_WEBHOOK_VERIFICATION_TOKEN")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+LOGO_URL = os.getenv("LOGO_URL", "https://i.imgur.com/default-logo.png")
 
 xendit.api_key = XENDIT_API_KEY
 app = Flask(__name__)
@@ -20,68 +20,55 @@ bot = Application.builder().token(TELEGRAM_TOKEN).build()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# — FUNGSI ADMIN
+# UTILS
 def is_admin(update: Update):
     return str(update.effective_user.id) == ADMIN_CHAT_ID
 
-async def new_product(update: Update, ctx):
+# ADMIN COMMANDS
+async def new_product(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update): return
     args = " ".join(ctx.args).split("|")
     if len(args) < 4:
         return await update.message.reply_text("Format: /newproduct id|nama|harga|deskripsi")
     idp, n, h, d = [x.strip() for x in args]
-    import requests, os
-    SUPABASE_URL = os.environ["SUPABASE_URL"]
-    SUPABASE_KEY = os.environ["SUPABASE_KEY"]
-    headers = {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type": "application/json"
-    }
-    requests.post(f"{SUPABASE_URL}/rest/v1/products", headers=headers, json={
+    import requests
+    from supabase_client import SUPABASE_URL, HEADERS
+    requests.post(f"{SUPABASE_URL}/rest/v1/products", headers=HEADERS, json={
         "id": idp, "nama": n, "harga": int(h), "deskripsi": d
     })
     await update.message.reply_text(f"✅ Produk '{n}' ditambahkan.")
 
-async def add_stock(update: Update, ctx):
+async def add_stock(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update): return
     try:
         pid = ctx.args[0]
         akun = " ".join(ctx.args[1:])
-        import requests, os
-        SUPABASE_URL = os.environ["SUPABASE_URL"]
-        SUPABASE_KEY = os.environ["SUPABASE_KEY"]
-        headers = {
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}",
-            "Content-Type": "application/json"
-        }
-        requests.post(f"{SUPABASE_URL}/rest/v1/stok_akun", headers=headers, json={
-            "produk_id": pid,
-            "detail": akun,
-            "sold": False
+        from supabase_client import SUPABASE_URL, HEADERS
+        import requests
+        requests.post(f"{SUPABASE_URL}/rest/v1/stok_akun", headers=HEADERS, json={
+            "produk_id": pid, "detail": akun, "sold": False
         })
         await update.message.reply_text(f"✅ Stok akun ditambahkan ke '{pid}'.")
     except:
-        await update.message.reply_text("Format: /add <produk_id> <akun_detail>")
+        return await update.message.reply_text("Format: /add <produk_id> <akun_detail>")
 
-async def info_stock(update: Update, ctx):
+async def info_stock(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update): return
     rows = get_products()
     teks = "📦 Stok Produk:\n"
     for p in rows:
-        stok = get_stock(p["id"])
-        teks += f"- {p['nama']} (`{p['id']}`): {len(stok)} akun\n"
-    await update.message.reply_text(teks)
+        stok = len(get_stock(p["id"]))
+        teks += f"- {p['nama']} (`{p['id']}`): {stok} akun\n"
+    await update.message.reply_text(teks, parse_mode="Markdown")
 
-# — HANDLER PENGGUNA
-async def start(update: Update, ctx):
+# PENGGUNA
+async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     rows = get_products()
     teks = f"**Selamat datang!** Silakan cek stok produk..."
     btn = [[InlineKeyboardButton("✅ Cek Stok", callback_data="cek")]]
     await update.message.reply_photo(photo=LOGO_URL, caption=teks, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(btn))
 
-async def btn_handler(update: Update, ctx):
+async def btn_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     if q.data == "cek":
@@ -105,52 +92,50 @@ async def btn_handler(update: Update, ctx):
         insert_order(ext, q.from_user.id, pid, prod["harga"])
         await q.edit_message_text(f"✅ Invoice siap!\n{inv.invoice_url}")
     elif q.data == "back":
-        await start(update, ctx)
+        return await start(update, ctx)
 
-async def text_handler(update: Update, ctx):
-    return await update.message.reply_text("Ketik /start untuk mulai.")
+async def text_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Ketik /start untuk mulai.")
 
-# — FLASK ROUTES
+# FLASK ROUTES
 @app.route("/", methods=["GET"])
 def home():
     return "OK"
 
 @app.route("/telegram", methods=["POST"])
-def tg_webhook():
-    upd = Update.de_json(request.get_json(force=True), bot.bot)
-    asyncio.run(bot.process_update(upd))
-    return jsonify(ok=True)
+def telegram_webhook():
+    try:
+        upd = Update.de_json(request.get_json(force=True), bot.bot)
+        asyncio.run(bot.initialize())
+        asyncio.run(bot.process_update(upd))
+        return jsonify(ok=True)
+    except Exception as e:
+        logger.error("Telegram webhook error: %s", e, exc_info=True)
+        return "error", 500
 
 @app.route("/webhook/xendit", methods=["POST"])
-def xi_webhook():
+def xendit_webhook():
     if request.headers.get("x-callback-token") != XENDIT_WEBHOOK_TOKEN:
         return "forbidden", 403
     d = request.json
     if d.get("status") == "PAID":
-        ext_id = d["external_id"]
-        produk_id = ext_id.split("-")[1] if "-" in ext_id else None
-        akun = pop_one_akun(produk_id) if produk_id else None
-        user_data = get_order_user(ext_id)
-        if not user_data:
-            return jsonify(ok=True)
-        chatid = user_data[0]["user_id"]
-        msg = "✅ Pembayaran diterima!\n"
-        if akun:
-            msg += f"Akun kamu: `{akun['detail']}`"
-        else:
-            msg += "Stok akun belum tersedia, akan dikirim menyusul."
-        from telegram import Bot
-        Bot(TELEGRAM_TOKEN).send_message(chat_id=chatid, text=msg, parse_mode="Markdown")
-        update_order_status(ext_id, akun_id=akun["id"] if akun else None)
+        external_id = d["external_id"]
+        update_order_status(external_id)
+        akun = pop_one_akun(external_id.split("-")[1])  # asumsi: format order-<produk_id>-<user_id>-<timestamp>
+        user_data = get_order_user(external_id)
+        if akun and user_data:
+            chatid = user_data[0]["user_id"]
+            msg = f"✅ Pembayaran diterima!\nAkun kamu:\n`{akun['detail']}`"
+            bot.bot.send_message(chatid, msg, parse_mode="Markdown")
     return jsonify(ok=True)
 
-# — INISIALISASI BOT
+# SETUP & RUN
 async def setup():
     await bot.bot.set_my_commands([
         BotCommand("start", "Mulai"),
-        BotCommand("newproduct", "Tambah Produk"),
-        BotCommand("add", "Tambah Stok"),
-        BotCommand("infostock", "Lihat Stok"),
+        BotCommand("newproduct", "Tambah produk (admin)"),
+        BotCommand("add", "Tambah stok (admin)"),
+        BotCommand("infostock", "Lihat stok produk (admin)")
     ])
     bot.add_handler(CommandHandler("start", start))
     bot.add_handler(CommandHandler("newproduct", new_product))
