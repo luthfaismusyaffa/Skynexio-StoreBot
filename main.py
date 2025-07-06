@@ -1,12 +1,12 @@
-# main.py - VERSI FINAL UNTUK GUNICORN + UVICORN
+# main.py - VERSI FINAL SEDERHANA & STABIL
 
 import os
 import logging
-import asyncio
+import time
 from flask import Flask, request, jsonify
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
-from xendit import Xendit
+from xendit import Xendit # Menggunakan library Xendit versi baru
 from supabase_client import get_products, get_stock, pop_one_akun, insert_order, update_order_status, get_order_user
 
 # --- KONFIGURASI ---
@@ -18,6 +18,7 @@ XENDIT_WEBHOOK_TOKEN = os.getenv("XENDIT_WEBHOOK_VERIFICATION_TOKEN")
 
 # --- INISIALISASI ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# Cara baru inisialisasi Xendit
 xendit_client = Xendit(api_key=XENDIT_API_KEY)
 app = Flask(__name__)
 bot_app = Application.builder().token(TELEGRAM_TOKEN).build()
@@ -55,13 +56,14 @@ async def btn_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(f"⏳ Membuat invoice untuk {prod['nama']}...")
         try:
             ext_id = f"invoice__{pid}__{q.from_user.id}__{int(time.time())}"
+            # PERBAIKAN UTAMA: Cara baru membuat invoice
             inv = xendit_client.invoice.create(
                 external_id=ext_id,
                 amount=prod["harga"],
                 description=f"Pembelian {prod['nama']}",
                 customer={
                     "given_names": q.from_user.full_name,
-                    "email": f"{q.from_user.id}@telegram.user"
+                    "email": f"{q.from_user.id}@telegram.user" # Email wajib diisi
                 },
                 success_redirect_url=f"https://t.me/{ctx.bot.username}",
                 failure_redirect_url=f"https://t.me/{ctx.bot.username}"
@@ -94,14 +96,12 @@ async def xendit_hook():
     d = request.get_json()
     logging.info(f"Xendit webhook diterima: {d}")
 
-    event_type = d.get("event")
     # Logika baru untuk menangani format webhook yang berbeda
-    if event_type == "invoice.paid" or d.get("status") == "PAID":
-        data = d.get("data", d) # Ambil 'data' jika ada, jika tidak, ambil seluruh body
+    data = d.get("data", d)
+    if data.get("status") == "PAID":
         ext_id = data.get("external_id", "")
 
         if ext_id == "invoice_123124123":
-            logging.info("Webhook tes dari Xendit diterima.")
             return jsonify(ok=True)
 
         if not ext_id.startswith("invoice__"):
@@ -121,22 +121,14 @@ async def xendit_hook():
         user_id = orders[0]["user_id"]
         
         akun_detail = akun['data']
-        tipe = akun_detail.get('tipe', 'private')
-        detail_login = akun_detail.get('detail', 'N/A')
-        
-        pesan_akun = f"Login: `{detail_login}`"
-        if tipe == 'sharing':
-            pesan_akun += f"\nProfil: **{akun_detail.get('profil', 'N/A')}**"
-            pesan_akun += f"\nPIN: `{akun_detail.get('pin', 'N/A')}`"
-
-        pesan_sukses = f"✅ Pembayaran diterima!\n\nBerikut detail akun Anda:\n{pesan_akun}"
+        pesan_sukses = f"✅ Pembayaran diterima!\nAkun: `{akun_detail.get('detail', 'N/A')}`"
 
         await bot_app.bot.send_message(user_id, pesan_sukses, parse_mode="Markdown")
         await bot_app.bot.send_message(ADMIN_CHAT_ID, f"Penjualan sukses: {pid}")
         
     return jsonify(ok=True)
 
-# --- SETUP ---
+# --- SETUP & RUN ---
 async def setup():
     bot_app.add_handler(CommandHandler("start", start))
     bot_app.add_handler(CallbackQueryHandler(btn_handler))
@@ -147,10 +139,5 @@ async def setup():
     await bot_app.bot.set_my_commands([BotCommand("start", "Mulai bot")])
     logging.info("Bot webhook & commands berhasil diatur.")
 
-# Jalankan setup saat server mulai
-if __name__ != 'main':
-    loop = asyncio.get_event_loop()
-    if loop.is_running():
-        loop.create_task(setup())
-    else:
-        asyncio.run(setup())
+# Menjalankan setup async sebelum server Flask dimulai
+asyncio.run(setup())
