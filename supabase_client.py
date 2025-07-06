@@ -1,43 +1,63 @@
-from supabase import create_client, Client
 import os
+import requests
 
-# Ambil ENV dari Railway
-url: str = os.getenv("SUPABASE_URL")
-key: str = os.getenv("SUPABASE_KEY")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+HEADERS = {
+    "apikey": SUPABASE_KEY,
+    "Authorization": f"Bearer {SUPABASE_KEY}",
+    "Content-Type": "application/json"
+}
 
-# Validasi
-if not url or not key:
-    raise ValueError("❌ SUPABASE_URL atau SUPABASE_KEY tidak ditemukan di environment variables.")
+def get_products():
+    res = requests.get(f"{SUPABASE_URL}/rest/v1/products", headers=HEADERS)
+    return res.json()
 
-supabase: Client = create_client(url, key)
+def get_stock(produk_id):
+    res = requests.get(
+        f"{SUPABASE_URL}/rest/v1/stok_akun",
+        headers=HEADERS,
+        params={"produk_id": f"eq.{produk_id}", "sold": "eq.false"}
+    )
+    return res.json()
 
-# Ambil produk yang masih punya stok ready
-def get_products_ready():
-    response = supabase.table("products").select("id, nama, harga, deskripsi").execute()
-    return response.data if response and response.data else []
+def pop_one_akun(produk_id):
+    stok = get_stock(produk_id)
+    if not stok:
+        return None
+    akun = stok[0]
+    id_akun = akun["id"]
+    requests.patch(
+        f"{SUPABASE_URL}/rest/v1/stok_akun?id=eq.{id_akun}",
+        headers=HEADERS,
+        json={"sold": True}
+    )
+    return akun
 
-# Ambil 1 stok akun yang belum terjual untuk produk tertentu
-def get_stock_for_product(produk_id):
-    response = supabase.table("stok_akun")\
-        .select("*")\
-        .eq("produk_id", produk_id)\
-        .eq("sold", False)\
-        .limit(1)\
-        .execute()
-    return response.data[0] if response and response.data else None
+def insert_order(external_id, user_id, produk_id, harga):
+    data = {
+        "external_id": external_id,
+        "user_id": user_id,
+        "produk_id": produk_id,
+        "harga": harga,
+        "status": "PENDING"
+    }
+    requests.post(f"{SUPABASE_URL}/rest/v1/orders", headers=HEADERS, json=data)
 
-# Tandai akun sebagai sudah terjual
-def mark_stock_sold(akun_id):
-    supabase.table("stok_akun").update({"sold": True}).eq("id", akun_id).execute()
-
-# Buat order baru
-def create_order(record):
-    response = supabase.table("orders").insert(record).execute()
-    return response.data[0] if response and response.data else None
-
-# Update status order menjadi PAID (dan simpan akun_id jika ada)
 def update_order_status(external_id, akun_id=None):
-    update_data = {"status": "PAID"}
+    data = {"status": "PAID"}
     if akun_id:
-        update_data["akun_id"] = akun_id
-    supabase.table("orders").update(update_data).eq("external_id", external_id).execute()
+        data["akun_id"] = akun_id
+    requests.patch(
+        f"{SUPABASE_URL}/rest/v1/orders?external_id=eq.{external_id}",
+        headers=HEADERS,
+        json=data
+    )
+
+def get_order_user(external_id):
+    res = requests.get(
+        f"{SUPABASE_URL}/rest/v1/orders",
+        headers=HEADERS,
+        params={"external_id": f"eq.{external_id}"}
+    )
+    return res.json()
