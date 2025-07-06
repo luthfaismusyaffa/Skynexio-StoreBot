@@ -162,26 +162,63 @@ async def telegram_webhook():
         logger.error(e)
         return jsonify({"status": "error"}), 500
 
-@app.route("/webhook/xendit", methods=["POST"])
+@app.route('/webhook/xendit', methods=['POST'])
 async def xendit_webhook():
-    if request.headers.get("x-callback-token") != XENDIT_WEBHOOK_VERIFICATION_TOKEN:
-        return jsonify({"status": "unauthorized"}), 403
-    data = request.json
-    if data.get("status") == "PAID":
-        external_id = data.get("external_id")
-        orders = muat_data("orders.json")
-        order = next((o for o in orders if o["external_id"] == external_id and o["status"] == "PENDING"), None)
-        if order:
-            order["status"] = "PAID"
-            simpan_data(orders, "orders.json")
+    if request.headers.get('x-callback-token') != XENDIT_WEBHOOK_VERIFICATION_TOKEN:
+        return jsonify({'status': 'forbidden'}), 403
 
-            akun = ambil_akun_dari_stok(order["produk_id"])
-            if akun:
-                await bot_app.bot.send_message(order["user_id"], f"✅ Pembayaran sukses!\nBerikut akun kamu:\n`{akun}`", parse_mode="Markdown")
-                await bot_app.bot.send_message(ADMIN_CHAT_ID, f"✅ Penjualan sukses ke user {order['user_id']}\nAkun: {akun}")
-            else:
-                await bot_app.bot.send_message(order["user_id"], "Stok habis. Admin akan hubungi kamu.")
-    return jsonify({"status": "ok"})
+    data = request.json
+
+    if data.get('status') == 'PAID':
+        external_id = data.get('external_id')
+        orders = muat_data('orders.json')
+
+        order_data = next(
+            (o for o in orders if o.get('external_id') == external_id and o.get('status') == 'PENDING'),
+            None
+        )
+
+        if not order_data:
+            logger.warning(f"[XENDIT] Order dengan external_id '{external_id}' tidak ditemukan atau sudah diproses.")
+            return jsonify({'status': 'not_found'}), 404
+
+        # Tandai sebagai sudah dibayar
+        order_data['status'] = 'PAID'
+        simpan_data(orders, 'orders.json')
+
+        # Tambahkan statistik
+        counters = muat_data('counter.json')
+        counters['total_orders'] += 1
+        counters['total_turnover'] += order_data.get('harga', 0)
+        simpan_data(counters, 'counter.json')
+
+        # Kirim akun ke user
+        akun = ambil_akun_dari_stok(order_data['produk_id'])
+        link_garansi = f"https://t.me/{ADMIN_USERNAME}"
+
+        if akun:
+            parts = akun.split('|')
+            login = parts[0]
+            pesan_akun = f"Login: `{login}`"
+            if len(parts) > 1:
+                pesan_akun += f"\nProfil: **{parts[1]}**"
+            if len(parts) > 2:
+                pesan_akun += f"\nPIN: `{parts[2]}`"
+
+            pesan_sukses = (
+                f"✅ Pembayaran berhasil!\n\n"
+                f"{pesan_akun}\n\n"
+                f"Garansi berlaku jika kirim bukti login ke [Admin]({link_garansi})"
+            )
+
+            await bot_app.bot.send_message(order_data['user_id'], pesan_sukses, parse_mode='Markdown')
+            await bot_app.bot.send_message(ADMIN_CHAT_ID, f"✅ Penjualan sukses!\nID: {external_id}\nAkun: {akun}\nUser: {order_data['user_id']}")
+        else:
+            await bot_app.bot.send_message(order_data['user_id'], "Pembayaran berhasil, tapi stok kosong. Admin akan segera menghubungi kamu.")
+            await bot_app.bot.send_message(ADMIN_CHAT_ID, f"‼️ STOK HABIS ‼️\nID: {external_id} lunas tapi stok kosong. Hubungi user: {order_data['user_id']}")
+
+    return jsonify({'status': 'success'}), 200
+
 
 # --- Setup ---
 async def setup():
