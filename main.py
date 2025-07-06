@@ -1,12 +1,9 @@
-# main.py - VERSI FINAL DENGAN IMPORT ASYNCIO
+# main.py - VERSI FINAL DENGAN QUART
 
 import os
 import logging
-import json
-import asyncio # <-- INI PERBAIKANNYA
-import time
-from flask import Flask, request, jsonify
-from waitress import serve
+import asyncio
+from quart import Quart, request, jsonify
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from xendit import Xendit
@@ -22,14 +19,14 @@ XENDIT_WEBHOOK_TOKEN = os.getenv("XENDIT_WEBHOOK_VERIFICATION_TOKEN")
 # --- INISIALISASI ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 xendit_client = Xendit(api_key=XENDIT_API_KEY)
-app = Flask(__name__)
+app = Quart(__name__) # <-- PERUBAHAN: Menggunakan Quart
 bot_app = Application.builder().token(TELEGRAM_TOKEN).build()
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
-# --- HANDLER ---
+# --- HANDLER (Logika Bot Tetap Sama) ---
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     btn = [[InlineKeyboardButton("✅ Cek Stok Produk", callback_data="cek_stok")]]
-    await update.message.reply_text("Selamat datang di toko kami! Silakan cek produk yang tersedia:", reply_markup=InlineKeyboardMarkup(btn))
+    await update.message.reply_text("Selamat datang! Silakan cek produk yang tersedia:", reply_markup=InlineKeyboardMarkup(btn))
 
 async def btn_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -47,7 +44,7 @@ async def btn_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text("Pilih produk yang Anda inginkan:", reply_markup=InlineKeyboardMarkup(buttons))
         except Exception as e:
             logging.error(f"Error saat mengambil produk: {e}")
-            await q.edit_message_text("Gagal mengambil data produk. Coba lagi nanti.")
+            await q.edit_message_text("Gagal mengambil data produk.")
 
     elif q.data.startswith("order__"):
         pid = q.data.split("__", 1)[1]
@@ -59,34 +56,27 @@ async def btn_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         try:
             ext_id = f"invoice__{pid}__{q.from_user.id}__{int(time.time())}"
             inv = xendit_client.invoice.create(
-                external_id=ext_id,
-                amount=prod["harga"],
-                description=f"Pembelian {prod['nama']}",
-                customer={
-                    "given_names": q.from_user.full_name,
-                    "email": f"{q.from_user.id}@telegram.user"
-                },
-                success_redirect_url=f"https://t.me/{ctx.bot.username}",
-                failure_redirect_url=f"https://t.me/{ctx.bot.username}"
+                external_id=ext_id, amount=prod["harga"], description=prod["nama"],
+                customer={"given_names": q.from_user.full_name, "email": f"{q.from_user.id}@telegram.user"},
+                success_redirect_url=f"https://t.me/{ctx.bot.username}"
             )
             insert_order(ext_id, q.from_user.id, pid, prod["harga"])
-            await q.edit_message_text(f"✅ Invoice berhasil dibuat!\nSilakan selesaikan pembayaran melalui link berikut:\n\n{inv.invoice_url}")
+            await q.edit_message_text(f"✅ Invoice berhasil dibuat!\nLink pembayaran:\n\n{inv.invoice_url}")
         except Exception as e:
             logging.error(f"Gagal membuat invoice Xendit: {e}")
-            await q.edit_message_text("❌ Terjadi kesalahan saat membuat invoice. Silakan coba lagi.")
+            await q.edit_message_text("❌ Terjadi kesalahan saat membuat invoice.")
 
     elif q.data == "start_menu":
         btn = [[InlineKeyboardButton("✅ Cek Stok Produk", callback_data="cek_stok")]]
         await q.edit_message_text("Selamat datang! Silakan klik tombol di bawah:", reply_markup=InlineKeyboardMarkup(btn))
 
 async def text_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Perintah tidak dikenal. Silakan gunakan /start untuk memulai.")
+    await update.message.reply_text("Gunakan /start untuk memulai.")
 
 # --- WEBHOOKS ---
 @app.route("/telegram", methods=["POST"])
 async def telegram_webhook():
-    await bot_app.initialize()
-    await bot_app.process_update(Update.de_json(request.get_json(force=True), bot_app.bot))
+    await bot_app.process_update(Update.de_json(await request.get_json(), bot_app.bot))
     return jsonify(ok=True)
 
 @app.route("/webhook/xendit", methods=["POST"])
@@ -94,51 +84,33 @@ async def xendit_hook():
     if request.headers.get("x-callback-token") != XENDIT_WEBHOOK_TOKEN:
         return jsonify({"error": "Forbidden"}), 403
     
-    d = request.get_json()
+    d = await request.get_json()
     logging.info(f"Xendit webhook diterima: {d}")
-
-    # Logika baru untuk menangani format webhook yang berbeda
+    
     data = d.get("data", d)
     if data.get("status") == "PAID":
         ext_id = data.get("external_id", "")
-
-        if ext_id == "invoice_123124123":
-            logging.info("Webhook tes dari Xendit diterima.")
-            return jsonify(ok=True)
-
-        if not ext_id.startswith("invoice__"):
-            return jsonify({"error": "Invalid external_id"}), 400
+        if ext_id == "invoice_123124123": return jsonify(ok=True)
+        if not ext_id.startswith("invoice__"): return jsonify({"error": "Invalid external_id"}), 400
         
         orders = get_order_user(ext_id)
-        if not orders or orders[0].get('status') == 'PAID':
-            return jsonify(ok=True)
+        if not orders or orders[0].get('status') == 'PAID': return jsonify(ok=True)
         
         pid = ext_id.split("__")[1]
         akun = pop_one_akun(pid)
-        
-        if not akun:
-            return {"error": "No stock"}, 400
+        if not akun: return {"error": "No stock"}, 400
         
         update_order_status(ext_id, akun_id=akun["id"])
         user_id = orders[0]["user_id"]
         
-        akun_detail = akun['data']
-        tipe = akun_detail.get('tipe', 'private')
-        detail_login = akun_detail.get('detail', 'N/A')
-        
-        pesan_akun = f"Login: `{detail_login}`"
-        if tipe == 'sharing':
-            pesan_akun += f"\nProfil: **{akun_detail.get('profil', 'N/A')}**"
-            pesan_akun += f"\nPIN: `{akun_detail.get('pin', 'N/A')}`"
-
-        pesan_sukses = f"✅ Pembayaran diterima!\n\nBerikut detail akun Anda:\n{pesan_akun}"
-
+        pesan_sukses = f"✅ Pembayaran diterima!\nAkun: `{akun['data'].get('detail', 'N/A')}`"
         await bot_app.bot.send_message(user_id, pesan_sukses, parse_mode="Markdown")
         await bot_app.bot.send_message(ADMIN_CHAT_ID, f"Penjualan sukses: {pid}")
         
     return jsonify(ok=True)
 
-# --- SETUP & RUN ---
+# --- SETUP ---
+@app.before_serving
 async def setup():
     bot_app.add_handler(CommandHandler("start", start))
     bot_app.add_handler(CallbackQueryHandler(btn_handler))
@@ -148,11 +120,3 @@ async def setup():
     await bot_app.bot.set_webhook(WEBHOOK_URL + "/telegram")
     await bot_app.bot.set_my_commands([BotCommand("start", "Mulai bot")])
     logging.info("Bot webhook & commands berhasil diatur.")
-
-def main():
-    asyncio.run(setup())
-    port = int(os.getenv("PORT", 8080))
-    serve(app, host="0.0.0.0", port=port)
-
-if __name__ == "__main__":
-    main()
