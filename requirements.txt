@@ -1,5 +1,5 @@
 flask[async]==3.0.3
-python-telegram-bot==20.6
-xendit==0.1.3
-requests==2.32.4
-waitress==3.0.2
+python-telegram-bot==21.0.1
+xendit-python==1.1.0
+requests==2.32.3
+waitress==3.0.0
