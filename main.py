@@ -1,4 +1,3 @@
-# main.py
 import os, logging, time, asyncio
 from flask import Flask, request, jsonify
 from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
@@ -21,7 +20,7 @@ app = Flask(__name__)
 bot_app = Application.builder().token(TELEGRAM_TOKEN).build()
 logging.basicConfig(level=logging.INFO)
 
-headers = {
+HEADERS = {
     "apikey": SUPABASE_KEY,
     "Authorization": f"Bearer {SUPABASE_KEY}",
     "Content-Type": "application/json"
@@ -33,35 +32,21 @@ async def new_product(update, ctx):
     if not is_admin(update): return
     try:
         i,n,h,d = [x.strip() for x in " ".join(ctx.args).split("|",3)]
-        requests.post(f"{SUPABASE_URL}/rest/v1/products", headers=headers,
-            json={"id":i,"nama":n,"harga":int(h),"deskripsi":d})
+        requests.post(f"{SUPABASE_URL}/rest/v1/products", headers=HEADERS, json={"id":i,"nama":n,"harga":int(h),"deskripsi":d})
         await update.message.reply_text(f"✅ Produk '{n}' berhasil ditambahkan.")
     except Exception as e:
-        logging.error("new_product:", e)
+        logging.error("new_product:",e)
         await update.message.reply_text("Format: /newproduct id|nama|harga|deskripsi")
 
 async def add_stock(update, ctx):
     if not is_admin(update): return
     try:
-        produk_id = ctx.args[0]
-        akun_detail = " ".join(ctx.args[1:])
-        parts = akun_detail.split("|")
-        if len(parts) < 2:
-            return await update.message.reply_text("Format salah. Gunakan: /add <produk_id> email|durasi|password")
-
-        akun = {
-            "email": parts[0].strip(),
-            "durasi": parts[1].strip(),
-            "password": parts[2].strip() if len(parts) > 2 else ""
-        }
-
-        requests.post(f"{SUPABASE_URL}/rest/v1/stok_akun", headers=headers,
-            json={"produk_id": produk_id, "data": akun, "is_sold": False})
-
-        await update.message.reply_text(f"✅ Akun untuk `{produk_id}` berhasil ditambahkan.")
+        pid = ctx.args[0]; detail=" ".join(ctx.args[1:])
+        requests.post(f"{SUPABASE_URL}/rest/v1/stok_akun", headers=HEADERS, json={"produk_id":pid,"data":{"detail":detail},"is_sold":False})
+        await update.message.reply_text(f"✅ Stok akun untuk produk `{pid}` bertambah.")
     except Exception as e:
-        logging.error("add_stock:", e)
-        await update.message.reply_text("Terjadi kesalahan. Format: /add <produk_id> email|durasi|password")
+        logging.error("add_stock:",e)
+        await update.message.reply_text("Format: /add <produk_id> <akun_detail>")
 
 async def info_stock(update, ctx):
     if not is_admin(update): return
@@ -84,7 +69,7 @@ async def btn_handler(update, ctx):
     elif q.data.startswith("buy__"):
         pid=q.data.split("__",1)[1]
         prod=next((p for p in get_products() if p["id"]==pid),None)
-        if not prod: return await q.edit_message_text("Stok habis 😞")
+        if not prod: return await q.edit_message_text("Stok habis 😢")
         ext=f"invoice__{pid}__{q.from_user.id}__{int(time.time())}"
         inv=xendit.Invoice.create(external_id=ext, amount=prod["harga"], description=prod["nama"], customer={"given_names":q.from_user.full_name})
         insert_order(ext, q.from_user.id, pid, prod["harga"])
@@ -95,10 +80,10 @@ async def text_handler(update, ctx):
     await update.message.reply_text("Gunakan /start untuk mulai.")
 
 @app.route("/telegram", methods=["POST"])
-def telegram_webhook():
-    data=request.get_json(force=True)
-    update=Update.de_json(data, bot_app.bot)
-    asyncio.run(bot_app.process_update(update))
+async def telegram_webhook():
+    data = request.get_json(force=True)
+    update = Update.de_json(data, bot_app.bot)
+    await bot_app.process_update(update)
     return jsonify(ok=True)
 
 @app.route("/webhook/xendit", methods=["POST"])
@@ -114,14 +99,7 @@ def xendit_hook():
         akun=pop_one_akun(pid)
         update_order_status(ext, akun_id=akun["id"])
         user_id=orders[0]["user_id"]
-        akun_data = akun.get("data", {})
-        msg = f"""✅ Pembayaran diterima!
-
-🎫 Akun:
-📧 Email: `{akun_data.get("email", "-")}`
-🔑 Password: `{akun_data.get("password", "-")}`
-⏳ Durasi: `{akun_data.get("durasi", "-")}`"""
-        bot_app.bot.send_message(user_id, msg, parse_mode="Markdown")
+        bot_app.bot.send_message(user_id, f"✅ Pembayaran diterima!\nAkun: `{akun['data']['detail']}`", parse_mode="Markdown")
     return jsonify(ok=True)
 
 async def setup():
