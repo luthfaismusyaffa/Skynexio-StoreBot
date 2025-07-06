@@ -1,4 +1,4 @@
-# main.py - VERSI FINAL GUNICORN + UVICORN
+# main.py - VERSI FINAL DENGAN PERBAIKAN ASYNCIO
 
 import os
 import logging
@@ -6,10 +6,10 @@ import json
 import asyncio
 import time
 from flask import Flask, request, jsonify
-# from waitress import serve  <-- DIHAPUS
+from waitress import serve
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
-from xendit import Xendit # <-- PERUBAHAN: Menggunakan Xendit versi baru
+from xendit import Xendit
 from supabase_client import get_products, get_stock, pop_one_akun, insert_order, update_order_status, get_order_user
 
 # --- KONFIGURASI ---
@@ -21,7 +21,7 @@ XENDIT_WEBHOOK_TOKEN = os.getenv("XENDIT_WEBHOOK_VERIFICATION_TOKEN")
 
 # --- INISIALISASI ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-xendit_client = Xendit(api_key=XENDIT_API_KEY) # <-- PERUBAHAN: Cara inisialisasi Xendit
+xendit_client = Xendit(api_key=XENDIT_API_KEY)
 app = Flask(__name__)
 bot_app = Application.builder().token(TELEGRAM_TOKEN).build()
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -58,7 +58,6 @@ async def btn_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(f"⏳ Membuat invoice untuk {prod['nama']}...")
         try:
             ext_id = f"invoice__{pid}__{q.from_user.id}__{int(time.time())}"
-            # PERUBAHAN: Cara baru membuat invoice
             inv = xendit_client.invoice.create(
                 external_id=ext_id,
                 amount=prod["harga"],
@@ -98,6 +97,11 @@ async def xendit_hook():
     d = request.get_json()
     logging.info(f"Xendit webhook diterima: {d}")
 
+    # Cek jika ini adalah tes dari dashboard Xendit
+    if d.get("external_id") == "invoice_123124123":
+        logging.info("Webhook tes dari Xendit diterima, merespons sukses.")
+        return jsonify(ok=True)
+
     # Cek jika event dari Xendit adalah "invoice paid"
     event_type = d.get("event")
     if event_type == "invoice.paid":
@@ -133,16 +137,12 @@ async def xendit_hook():
 
         await bot_app.bot.send_message(user_id, pesan_sukses, parse_mode="Markdown")
         await bot_app.bot.send_message(ADMIN_CHAT_ID, f"Penjualan sukses: {pid}")
-    
-    # Cek jika ini adalah tes dari dashboard Xendit
-    elif d.get("external_id") == "invoice_123124123":
-        logging.info("Webhook tes dari Xendit diterima, merespons sukses.")
-        return jsonify(ok=True)
         
     return jsonify(ok=True)
 
-# --- SETUP ---
+# --- SETUP & RUN ---
 async def setup():
+    """Mengatur semua handler dan webhook bot."""
     bot_app.add_handler(CommandHandler("start", start))
     bot_app.add_handler(CallbackQueryHandler(btn_handler))
     bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
@@ -152,10 +152,14 @@ async def setup():
     await bot_app.bot.set_my_commands([BotCommand("start", "Mulai bot")])
     logging.info("Bot webhook & commands berhasil diatur.")
 
-# Jalankan setup saat server mulai
-if __name__ != 'main':
-    loop = asyncio.get_event_loop()
-    if loop.is_running():
-        loop.create_task(setup())
-    else:
-        asyncio.run(setup())
+def main():
+    """Fungsi utama untuk menjalankan setup async dan server web."""
+    # PERBAIKAN: Cara yang lebih modern dan simpel untuk menjalankan setup async
+    asyncio.run(setup())
+    
+    # Menjalankan server web Flask menggunakan waitress
+    port = int(os.getenv("PORT", 8080))
+    serve(app, host="0.0.0.0", port=port)
+
+if __name__ == "__main__":
+    main()
