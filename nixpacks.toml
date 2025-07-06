@@ -1,5 +1,4 @@
 # nixpacks.toml
 
 [start]
-# Ini adalah perintah yang benar untuk menjalankan server async Anda
-cmd = "gunicorn 'main:app' --worker-class uvicorn.workers.UvicornWorker"
+cmd = "gunicorn main:app"
